@@ -1,0 +1,18 @@
+:root { color-scheme: light dark; --gap: 0.75rem; }
+body { font-family: system-ui, sans-serif; margin: 0; line-height: 1.5; }
+.site-header { display: flex; gap: 1.5rem; align-items: baseline; padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+.brand { font-weight: 700; text-decoration: none; color: inherit; }
+main { max-width: 42rem; margin: 0 auto; padding: 1rem 1.5rem 3rem; }
+.inline-form { display: flex; gap: var(--gap); margin-bottom: 0.5rem; }
+.inline-form input { flex: 1; padding: 0.4rem 0.6rem; }
+button { padding: 0.4rem 0.9rem; cursor: pointer; }
+button.danger { color: #b00020; }
+.deck-list { list-style: none; padding: 0; margin: 1rem 0; }
+.deck-row { display: flex; align-items: center; gap: var(--gap); padding: 0.5rem 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
+.deck-name { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
+.deck-meta { opacity: 0.7; font-size: 0.9rem; }
+.error { color: #b00020; margin: 0.25rem 0; }
+.empty { opacity: 0.7; margin: 1rem 0; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

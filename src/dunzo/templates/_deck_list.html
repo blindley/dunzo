@@ -1,0 +1,17 @@
+{% if decks %}
+<ul class="deck-list">
+  {% for deck in decks %}
+  <li class="deck-row">
+    <span class="deck-name">{{ deck.name }}</span>
+    <span class="deck-meta">{{ deck.note_count }} note{{ "" if deck.note_count == 1 else "s" }}</span>
+    <button type="button" class="danger"
+            hx-delete="/decks/{{ deck.id }}" hx-target="#deck-list" hx-swap="innerHTML"
+            hx-confirm="Delete deck “{{ deck.name }}”{% if deck.note_count %} and its {{ deck.note_count }} note{{ '' if deck.note_count == 1 else 's' }}, including any review progress{% endif %}? This cannot be undone.">
+      Delete
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No decks yet. Create one above.</p>
+{% endif %}

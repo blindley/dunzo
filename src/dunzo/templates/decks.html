@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Decks · dunzo{% endblock %}
+{% block content %}
+<h1>Decks</h1>
+
+<form class="inline-form" hx-post="/decks" hx-target="#deck-list" hx-swap="innerHTML"
+      hx-on::after-request="if (event.detail.successful) { this.reset(); document.getElementById('deck-form-error').innerHTML = ''; }"
+      method="post" action="/decks">
+  <label for="deck-name" class="visually-hidden">New deck name</label>
+  <input id="deck-name" name="name" type="text" placeholder="New deck name" maxlength="200"
+         value="{{ name or '' }}" required autofocus>
+  <button type="submit">Create deck</button>
+</form>
+<div id="deck-form-error" aria-live="polite">{% if error %}{% include "_form_error.html" %}{% endif %}</div>
+
+<div id="deck-list">
+  {% include "_deck_list.html" %}
+</div>
+{% endblock %}

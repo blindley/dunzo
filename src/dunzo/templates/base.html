@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}dunzo{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js"></script>
+  <script>
+    // Let validation errors (422) swap into the page; HTMX ignores 4xx/5xx by default.
+    document.addEventListener("htmx:beforeSwap", function (event) {
+      if (event.detail.xhr.status === 422) {
+        event.detail.shouldSwap = true;
+        event.detail.isError = false;
+      }
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/decks">dunzo</a>
+    <nav><a href="/decks">Decks</a></nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
