@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from dunzo import content_repo
+from dunzo import content_repo, starter_players
 from dunzo.config import get_settings
 from dunzo.db import get_db
 from dunzo.templating import templates
@@ -85,8 +85,11 @@ def players_page(request: Request, db: Db) -> Response:
 
 
 @router.get("/players/new", response_class=HTMLResponse)
-def new_player_page(request: Request, db: Db) -> Response:
-    return _form_page(request, db, player=None, values={"name": "", "source": "", "note_schema": ""})
+def new_player_page(request: Request, db: Db, starter: str = "") -> Response:
+    # ?starter=basic prefills the form with a ready-made player; nothing is saved until the
+    # user submits it. An unknown starter gives the blank form.
+    values = starter_players.get_starter(starter) or {"name": "", "source": "", "note_schema": ""}
+    return _form_page(request, db, player=None, values=values)
 
 
 @router.post("/players", response_class=HTMLResponse)

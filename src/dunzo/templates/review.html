@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Review {{ deck.name }} · dunzo{% endblock %}
+{% block content %}
+<p><a href="/decks/{{ deck.id }}">&larr; {{ deck.name }}</a></p>
+<h1>Review</h1>
+<p class="hint" id="review-counts" aria-live="polite"></p>
+<div id="review"
+     data-next-url="/decks/{{ deck.id }}/review/next"
+     data-report-url="/decks/{{ deck.id }}/review/report"
+     data-deck-url="/decks/{{ deck.id }}">
+  <div id="review-error" class="error" role="alert"></div>
+  <div id="review-stage"></div>
+  <noscript><p class="error">Reviewing needs JavaScript.</p></noscript>
+</div>
+<script src="/static/player-host.js"></script>
+<script src="/static/review.js"></script>
+{% endblock %}

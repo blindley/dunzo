@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Review history · dunzo{% endblock %}
+{% block content %}
+<p><a href="/notes/{{ note.id }}">&larr; {{ note.properties | note_preview }}</a></p>
+<h1>Review history</h1>
+<p class="hint">{{ note.card_count }} card{{ "" if note.card_count == 1 else "s" }} · newest first{% if deck %} · deck <a href="/decks/{{ deck.id }}">{{ deck.name }}</a>{% endif %}</p>
+{% if reviews %}
+<table class="history-table">
+  <thead><tr><th>When</th><th>Card</th><th>Answer</th><th>Detail</th></tr></thead>
+  <tbody>
+    {% for r in reviews %}
+    <tr>
+      <td>{{ r.reviewed_at | localtime }}</td>
+      <td>{{ r.card_index + 1 }}</td>
+      <td>{{ r.grade | grade_name }}{% if r.state_before is none %} (first review){% endif %}</td>
+      <td>{% if r.detail is not none %}<code>{{ r.detail | tojson }}</code>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">This note has not been reviewed yet.</p>
+{% endif %}
+{% endblock %}

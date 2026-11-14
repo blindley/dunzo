@@ -1,12 +1,13 @@
 """Deck management pages: list, create, delete (server-rendered, HTMX for the interactions)."""
 
 import sqlite3
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from dunzo import content_repo
+from dunzo import content_repo, review_queue
 from dunzo.db import get_db
 from dunzo.templating import templates
 
@@ -46,7 +47,13 @@ def deck_page(deck_id: str, request: Request, db: Db) -> Response:
     if deck is None:
         raise HTTPException(status_code=404, detail="Deck not found")
     return templates.TemplateResponse(
-        request, "deck.html", {"deck": deck, "notes": content_repo.list_notes(db, deck_id)}
+        request,
+        "deck.html",
+        {
+            "deck": deck,
+            "notes": content_repo.list_notes(db, deck_id),
+            "counts": review_queue.counts(db, deck_id, time.time()),
+        },
     )
 
 

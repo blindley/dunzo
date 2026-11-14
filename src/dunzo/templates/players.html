@@ -3,7 +3,10 @@
 {% block content %}
 <h1>Players</h1>
 <p class="hint">A player is the JavaScript program that shows and runs one card.</p>
-<p><a class="button" href="/players/new">New player</a></p>
+<p>
+  <a class="button" href="/players/new">New player</a>
+  <a class="button" href="/players/new?starter=basic">New basic front/back player</a>
+</p>
 <div id="player-list-error" aria-live="polite"></div>
 <div id="player-list">
   {% include "_player_list.html" %}

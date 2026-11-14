@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Stats{{ ": " ~ deck.name if deck }} · dunzo{% endblock %}
+{% block content %}
+{% if deck %}<p><a href="/decks/{{ deck.id }}">&larr; {{ deck.name }}</a></p>{% else %}<p><a href="/decks">&larr; Decks</a></p>{% endif %}
+<h1>{{ "Stats: " ~ deck.name if deck else "Stats" }}</h1>
+{% if not deck %}<p class="hint">All decks together. Open a deck to see its own stats.</p>{% endif %}
+
+<dl class="stats">
+  <div><dt>Cards</dt><dd>{{ stats.cards }}</dd></div>
+  <div><dt>New</dt><dd>{{ stats.new }}</dd></div>
+  <div><dt>Reviewed</dt><dd>{{ stats.reviewed }}</dd></div>
+  <div><dt>Due now</dt><dd>{{ stats.due_now }}</dd></div>
+  <div><dt>Reviews today</dt><dd>{{ stats.reviews_today }}</dd></div>
+  <div><dt>All reviews</dt><dd>{{ stats.total_reviews }}</dd></div>
+</dl>
+
+<h2>Coming due</h2>
+<ul class="bars">
+  {% for d in stats.forecast %}
+  <li class="bar-row">
+    <span class="label">{{ "Today" if loop.first else d.day.strftime("%a %d %b") }}</span>
+    <span class="bar" style="width: {{ (d.count / max_forecast * 60) | round(1) }}%"></span>
+    <span class="count">{{ d.count }}</span>
+  </li>
+  {% endfor %}
+</ul>
+<p class="hint">Overdue cards are counted under Today.</p>
+
+<h2>Reviews per day (last {{ days }} days)</h2>
+<ul class="bars">
+  {% for d in stats.history | reverse %}
+  <li class="bar-row">
+    <span class="label">{{ "Today" if loop.first else d.day.strftime("%a %d %b") }}</span>
+    <span class="bar" style="width: {{ (d.count / max_history * 60) | round(1) }}%"></span>
+    <span class="count">{{ d.count }}</span>
+  </li>
+  {% endfor %}
+</ul>
+
+<h2>Answers (last {{ days }} days)</h2>
+<dl class="stats">
+  {% for grade, count in stats.grades.items() %}
+  <div><dt>{{ grade | grade_name }}</dt><dd>{{ count }}</dd></div>
+  {% endfor %}
+  <div><dt>Retention</dt><dd>{{ ((stats.retention * 100) | round | int) ~ "%" if stats.retention is not none else "–" }}</dd></div>
+</dl>
+<p class="hint">Retention: of the cards you had seen before, the share you did not answer Again.</p>
+{% endblock %}

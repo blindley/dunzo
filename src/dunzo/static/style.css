@@ -32,3 +32,15 @@ form.inline { display: inline; margin: 0; }
 .note-list { padding-left: 0; }
 .media-row { flex-wrap: wrap; }
 .hash { flex-basis: 100%; font-size: 0.75rem; opacity: 0.7; overflow-wrap: anywhere; user-select: all; }
+.player-frame { width: 100%; height: 60vh; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 4px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: var(--gap); margin: 1rem 0; }
+.stats div { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 4px; padding: 0.5rem 0.75rem; }
+.stats dt { opacity: 0.7; font-size: 0.85rem; }
+.stats dd { margin: 0; font-size: 1.4rem; font-weight: 600; }
+.bars { list-style: none; padding: 0; margin: 0.5rem 0 1.5rem; }
+.bar-row { display: flex; align-items: center; gap: var(--gap); font-size: 0.85rem; }
+.bar-row .label { width: 6.5rem; opacity: 0.7; flex: none; }
+.bar-row .bar { height: 0.8rem; background: currentColor; opacity: 0.45; border-radius: 2px; min-width: 1px; }
+.bar-row .count { opacity: 0.8; }
+.history-table { width: 100%; border-collapse: collapse; }
+.history-table th, .history-table td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }

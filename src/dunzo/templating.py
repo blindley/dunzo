@@ -1,5 +1,6 @@
 """Shared Jinja2 environment for the management UI."""
 
+from datetime import datetime
 from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
@@ -30,5 +31,19 @@ def note_preview(properties: dict, limit: int = 80) -> str:
     return "(no text)"
 
 
+GRADE_NAMES = {1: "Again", 2: "Hard", 3: "Good", 4: "Easy"}
+
+
+def grade_name(grade: int) -> str:
+    return GRADE_NAMES.get(grade, str(grade))
+
+
+def localtime(timestamp: float) -> str:
+    """A unix timestamp as local date and time, e.g. 2026-11-14 09:30."""
+    return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+
+
 templates.env.filters["filesize"] = filesize
 templates.env.filters["note_preview"] = note_preview
+templates.env.filters["grade_name"] = grade_name
+templates.env.filters["localtime"] = localtime

@@ -632,3 +632,32 @@ def list_note_media(conn: sqlite3.Connection, note_id: str) -> list[Media]:
         (note_id,),
     ).fetchall()
     return [_media_from_row(r) for r in rows]
+
+
+# ------------------------------------------------------------ media a card may use
+
+# A card (note + player) may use the media linked to the note and the media linked to the
+# note's player. This is the set a player can resolve to URLs while reviewing.
+_CARD_MEDIA_SELECT = """
+    SELECT m.id, m.mime, m.size FROM media m
+    WHERE m.id IN (
+        SELECT media_id FROM note_media WHERE note_id = :note
+        UNION
+        SELECT pm.media_id FROM player_media pm JOIN note n ON n.player_id = pm.player_id
+        WHERE n.id = :note
+    )
+"""
+
+
+def list_card_media(conn: sqlite3.Connection, note_id: str) -> list[Media]:
+    """Media attached to the note plus media attached to its player (each once)."""
+    rows = conn.execute(_CARD_MEDIA_SELECT + " ORDER BY m.mime, m.id", {"note": note_id})
+    return [_media_from_row(r) for r in rows.fetchall()]
+
+
+def get_card_media(conn: sqlite3.Connection, note_id: str, media_id: str) -> Media | None:
+    """The media record if the note's cards may use it, otherwise None."""
+    row = conn.execute(
+        _CARD_MEDIA_SELECT + " AND m.id = :media", {"note": note_id, "media": media_id}
+    ).fetchone()
+    return _media_from_row(row) if row else None

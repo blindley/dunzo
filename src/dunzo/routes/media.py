@@ -1,4 +1,4 @@
-"""Serving stored media: GET /media/{id}."""
+"""Serving stored media: GET /media/{id}, and the per-card route players use."""
 
 import re
 import sqlite3
@@ -33,3 +33,23 @@ def serve_media(media_id: str, db: Annotated[sqlite3.Connection, Depends(get_db)
     if media is None or not path.is_file():
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type=media.mime, headers=_SAFE_HEADERS)
+
+
+@router.get("/cards/{note_id}/media/{media_id}", include_in_schema=False)
+def serve_card_media(
+    note_id: str, media_id: str, db: Annotated[sqlite3.Connection, Depends(get_db)]
+) -> FileResponse:
+    """Media for a player while it reviews a note's cards.
+
+    Only media linked to the note or to the note's player is served, so a player can resolve
+    just the hashes the host listed for its card. The player's frame has an opaque origin, so
+    fonts (which are fetched with CORS) need the wildcard; the bytes are not secret.
+    """
+    if not _MEDIA_ID.fullmatch(media_id):
+        raise HTTPException(status_code=404)
+    media = content_repo.get_card_media(db, note_id, media_id)
+    path = get_settings().media_dir / media_id
+    if media is None or not path.is_file():
+        raise HTTPException(status_code=404)
+    headers = {**_SAFE_HEADERS, "Access-Control-Allow-Origin": "*"}
+    return FileResponse(path, media_type=media.mime, headers=headers)
