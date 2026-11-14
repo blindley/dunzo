@@ -1,9 +1,13 @@
+{%- set path = request.url.path -%}
+{%- set section = "players" if path.startswith("/players") else "stats" if path == "/stats" else "packages" if (path.startswith("/packages") or path == "/export") else "decks" -%}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>{% block title %}dunzo{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><rect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%232f5fd0%22/></svg>">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/htmx.min.js"></script>
   <script>
@@ -17,13 +21,20 @@
     });
   </script>
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
+  {% block page %}
   <header class="site-header">
     <a class="brand" href="/decks">dunzo</a>
-    <nav><a href="/decks">Decks</a><a href="/players">Players</a><a href="/stats">Stats</a><a href="/packages">Import/Export</a></nav>
+    <nav aria-label="Main">
+      <a href="/decks"{% if section == "decks" %} aria-current="page"{% endif %}>Decks</a>
+      <a href="/players"{% if section == "players" %} aria-current="page"{% endif %}>Players</a>
+      <a href="/stats"{% if section == "stats" %} aria-current="page"{% endif %}>Stats</a>
+      <a href="/packages"{% if section == "packages" %} aria-current="page"{% endif %}>Import/Export</a>
+    </nav>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
+  {% endblock %}
 </body>
 </html>

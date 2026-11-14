@@ -1,15 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Review {{ deck.name }} · dunzo{% endblock %}
-{% block content %}
-<p><a href="/decks/{{ deck.id }}">&larr; {{ deck.name }}</a></p>
-<h1>Review</h1>
-<p class="hint" id="review-counts" aria-live="polite"></p>
-<div id="review"
+{% block body_class %}review-page{% endblock %}
+{# The review page replaces the site header and page column: a top bar for application
+   controls and information, and the player fills the rest of the window. #}
+{% block page %}
+<div id="review" class="review-shell"
      data-next-url="/decks/{{ deck.id }}/review/next"
      data-report-url="/decks/{{ deck.id }}/review/report"
      data-deck-url="/decks/{{ deck.id }}">
-  <div id="review-error" class="error" role="alert"></div>
-  <div id="review-stage"></div>
+  <header class="review-bar">
+    <a class="review-back" href="/decks/{{ deck.id }}">&larr; {{ deck.name }}</a>
+    <span class="review-counts hint" id="review-counts" aria-live="polite"></span>
+    <span class="review-error error" id="review-error" role="alert"></span>
+    <div class="review-controls" id="review-controls"><!-- room for application controls --></div>
+  </header>
+  <div id="review-stage" class="review-stage"></div>
   <noscript><p class="error">Reviewing needs JavaScript.</p></noscript>
 </div>
 <script src="/static/player-host.js"></script>
