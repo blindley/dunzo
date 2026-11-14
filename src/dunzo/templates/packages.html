@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Import and export · dunzo{% endblock %}
+{% block content %}
+<h1>Import and export</h1>
+<p class="hint">A package is a zip file with decks, their notes in order, the players they use and their media. It never contains review progress.</p>
+
+<h2>Export</h2>
+{% if decks %}
+<p><a class="button" href="/export">Export all decks</a></p>
+<ul class="deck-list">
+  {% for deck in decks %}
+  <li class="deck-row">
+    <a class="deck-name" href="/decks/{{ deck.id }}">{{ deck.name }}</a>
+    <span class="deck-meta">{{ deck.note_count }} note{{ "" if deck.note_count == 1 else "s" }}</span>
+    <a href="/decks/{{ deck.id }}/export">Export</a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No decks to export yet.</p>
+{% endif %}
+
+<h2>Import</h2>
+<form class="stack" method="post" action="/packages/import" enctype="multipart/form-data">
+  <label for="package-file">Package file (.zip)</label>
+  <input id="package-file" name="file" type="file" accept=".zip,application/zip" required>
+  <p class="hint">Decks and notes are added as new copies, so importing a package twice gives two copies. A player that is already here with the same code is reused; one with the same identity but different code is added next to it, and the existing one is not changed.</p>
+  <div aria-live="polite">
+    {% if error %}{% include "_form_error.html" %}{% endif %}
+    {% if result %}
+    <p class="success">Imported {{ result.decks }} deck{{ "" if result.decks == 1 else "s" }} with {{ result.notes }} note{{ "" if result.notes == 1 else "s" }}.
+      Players: {{ result.players_added }} added, {{ result.players_reused }} already here.
+      Media files in the package: {{ result.media }}.</p>
+    {% endif %}
+  </div>
+  <div><button type="submit">Import</button></div>
+</form>
+{% endblock %}

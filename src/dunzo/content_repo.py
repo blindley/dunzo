@@ -218,13 +218,21 @@ def get_player(conn: sqlite3.Connection, player_id: str) -> Player | None:
 
 
 def create_player(
-    conn: sqlite3.Connection, name: str, source: str, note_schema: str | None = None
+    conn: sqlite3.Connection,
+    name: str,
+    source: str,
+    note_schema: str | None = None,
+    player_id: str | None = None,
 ) -> Player:
-    """Create a player. Raises ValueError if the name, source or schema is invalid."""
+    """Create a player. Raises ValueError if the name, source or schema is invalid.
+
+    The id is a new UUID unless `player_id` is given (package import keeps a player's id so
+    the same player is recognised across installations). The caller makes sure it is unused.
+    """
     cleaned_name = normalize_player_name(name)
     cleaned_source = normalize_player_source(source)
     schema = normalize_note_schema(note_schema)
-    player_id = str(uuid.uuid4())
+    player_id = player_id or str(uuid.uuid4())
     source_hash = _hash_source(cleaned_source)
     conn.execute(
         "INSERT INTO player (id, name, source, source_hash, note_schema) VALUES (?, ?, ?, ?, ?)",
