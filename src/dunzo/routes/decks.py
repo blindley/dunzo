@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from dunzo import content_repo
@@ -37,6 +37,16 @@ def index() -> RedirectResponse:
 def decks_page(request: Request, db: Db) -> Response:
     return templates.TemplateResponse(
         request, "decks.html", {"decks": content_repo.list_decks(db)}
+    )
+
+
+@router.get("/decks/{deck_id}", response_class=HTMLResponse)
+def deck_page(deck_id: str, request: Request, db: Db) -> Response:
+    deck = content_repo.get_deck(db, deck_id)
+    if deck is None:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    return templates.TemplateResponse(
+        request, "deck.html", {"deck": deck, "notes": content_repo.list_notes(db, deck_id)}
     )
 
 

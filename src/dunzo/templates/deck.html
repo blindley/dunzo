@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ deck.name }} · dunzo{% endblock %}
+{% block content %}
+<p><a href="/decks">&larr; Decks</a></p>
+<h1>{{ deck.name }}</h1>
+<p><a class="button" href="/decks/{{ deck.id }}/notes/new">Add note</a></p>
+<div id="note-list">
+  {% include "_note_list.html" %}
+</div>
+{% endblock %}

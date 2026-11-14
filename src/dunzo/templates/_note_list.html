@@ -1,0 +1,28 @@
+{% if notes %}
+<ol class="deck-list note-list">
+  {% for note in notes %}
+  <li class="deck-row">
+    <a class="deck-name" href="/notes/{{ note.id }}">{{ note.properties | note_preview }}</a>
+    <span class="deck-meta">{{ note.player_name }} · {{ note.card_count }} card{{ "" if note.card_count == 1 else "s" }}</span>
+    <form class="inline" method="post" action="/decks/{{ deck.id }}/notes/{{ note.id }}/move"
+          hx-post="/decks/{{ deck.id }}/notes/{{ note.id }}/move" hx-target="#note-list" hx-swap="innerHTML">
+      <input type="hidden" name="direction" value="up">
+      <button type="submit" title="Move up" aria-label="Move up" {% if loop.first %}disabled{% endif %}>&uarr;</button>
+    </form>
+    <form class="inline" method="post" action="/decks/{{ deck.id }}/notes/{{ note.id }}/move"
+          hx-post="/decks/{{ deck.id }}/notes/{{ note.id }}/move" hx-target="#note-list" hx-swap="innerHTML">
+      <input type="hidden" name="direction" value="down">
+      <button type="submit" title="Move down" aria-label="Move down" {% if loop.last %}disabled{% endif %}>&darr;</button>
+    </form>
+    <a href="/decks/{{ deck.id }}/notes/new?before={{ note.id }}" title="Add a note before this one">Insert before</a>
+    <button type="button" class="danger"
+            hx-delete="/decks/{{ deck.id }}/notes/{{ note.id }}" hx-target="#note-list" hx-swap="innerHTML"
+            hx-confirm="Delete this note? Any review progress for its cards is deleted too. This cannot be undone.">
+      Delete
+    </button>
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="empty">No notes in this deck yet.</p>
+{% endif %}

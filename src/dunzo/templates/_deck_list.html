@@ -2,7 +2,7 @@
 <ul class="deck-list">
   {% for deck in decks %}
   <li class="deck-row">
-    <span class="deck-name">{{ deck.name }}</span>
+    <a class="deck-name" href="/decks/{{ deck.id }}">{{ deck.name }}</a>
     <span class="deck-meta">{{ deck.note_count }} note{{ "" if deck.note_count == 1 else "s" }}</span>
     <button type="button" class="danger"
             hx-delete="/decks/{{ deck.id }}" hx-target="#deck-list" hx-swap="innerHTML"

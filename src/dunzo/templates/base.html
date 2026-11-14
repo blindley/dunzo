@@ -7,9 +7,10 @@
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/htmx.min.js"></script>
   <script>
-    // Let validation errors (422) swap into the page; HTMX ignores 4xx/5xx by default.
+    // Let validation errors (422) and refusals (409) swap into the page; HTMX ignores
+    // 4xx/5xx responses by default. The server sets HX-Retarget to the right error slot.
     document.addEventListener("htmx:beforeSwap", function (event) {
-      if (event.detail.xhr.status === 422) {
+      if (event.detail.xhr.status === 422 || event.detail.xhr.status === 409) {
         event.detail.shouldSwap = true;
         event.detail.isError = false;
       }
@@ -19,7 +20,7 @@
 <body>
   <header class="site-header">
     <a class="brand" href="/decks">dunzo</a>
-    <nav><a href="/decks">Decks</a></nav>
+    <nav><a href="/decks">Decks</a><a href="/players">Players</a></nav>
   </header>
   <main>
     {% block content %}{% endblock %}

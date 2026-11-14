@@ -1,0 +1,18 @@
+{% if media_list %}
+<ul class="deck-list">
+  {% for m in media_list %}
+  <li class="deck-row media-row">
+    <a class="deck-name" href="/media/{{ m.id }}" target="_blank" rel="noopener">{{ m.mime }}</a>
+    <span class="deck-meta">{{ m.size | filesize }}</span>
+    <button type="button" class="danger"
+            hx-delete="/notes/{{ note_id }}/media/{{ m.id }}" hx-target="#note-media" hx-swap="innerHTML"
+            hx-confirm="Remove this file from the note?">
+      Remove
+    </button>
+    <code class="hash">{{ m.id }}</code>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No media attached.</p>
+{% endif %}

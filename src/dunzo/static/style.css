@@ -16,3 +16,19 @@ button.danger { color: #b00020; }
 .error { color: #b00020; margin: 0.25rem 0; }
 .empty { opacity: 0.7; margin: 1rem 0; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.site-header nav { display: flex; gap: 1rem; }
+.stack { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.5rem; }
+.stack input[type="text"], .stack textarea { padding: 0.4rem 0.6rem; font: inherit; width: 100%; box-sizing: border-box; }
+.stack textarea.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+.hint { opacity: 0.7; font-size: 0.9rem; margin: 0.25rem 0; }
+.success { color: #1b7f3b; margin: 0.25rem 0; }
+a.button { display: inline-block; padding: 0.4rem 0.9rem; border: 1px solid currentColor; border-radius: 4px;
+  text-decoration: none; color: inherit; }
+button:disabled { cursor: not-allowed; opacity: 0.5; }
+form.inline { display: inline; margin: 0; }
+.stack label.check { display: flex; gap: 0.5rem; align-items: center; }
+.error-list { color: #b00020; margin: 0.25rem 0; padding-left: 1.25rem; }
+.warning { border: 1px solid #b26a00; border-radius: 4px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+.note-list { padding-left: 0; }
+.media-row { flex-wrap: wrap; }
+.hash { flex-basis: 100%; font-size: 0.75rem; opacity: 0.7; overflow-wrap: anywhere; user-select: all; }

@@ -1,0 +1,18 @@
+{% if players %}
+<ul class="deck-list">
+  {% for player in players %}
+  <li class="deck-row">
+    <a class="deck-name" href="/players/{{ player.id }}">{{ player.name }}</a>
+    <span class="deck-meta">used by {{ player.note_count }} note{{ "" if player.note_count == 1 else "s" }}</span>
+    <button type="button" class="danger"
+            {% if player.note_count %}disabled title="Still used by notes"{% else %}
+            hx-delete="/players/{{ player.id }}" hx-target="#player-list" hx-swap="innerHTML"
+            hx-confirm="Delete player “{{ player.name }}”? This cannot be undone."{% endif %}>
+      Delete
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No players yet. Create one to get started.</p>
+{% endif %}

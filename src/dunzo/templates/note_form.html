@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit note" if note else "New note" }} · dunzo{% endblock %}
+{% block content %}
+<p><a href="/decks/{{ deck.id }}">&larr; {{ deck.name }}</a></p>
+<h1>{{ "Edit note" if note else "New note" }}</h1>
+<p class="hint">Player: <a href="/players/{{ player.id }}">{{ player.name }}</a></p>
+
+<form class="stack" method="post" action="{{ '/notes/' ~ note.id if note else '/decks/' ~ deck.id ~ '/notes' }}">
+  {% if not note %}
+  <input type="hidden" name="player_id" value="{{ player.id }}">
+  {% if before %}<input type="hidden" name="before" value="{{ before }}">{% endif %}
+  {% endif %}
+
+  {% if fields %}
+    {% for f in fields %}
+    {% set key = f.key %}
+    {% if f.kind == "boolean" %}
+    <label class="check"><input type="checkbox" id="{{ key }}" name="{{ key }}" {% if values[key] %}checked{% endif %}> {{ f.label }}</label>
+    {% else %}
+    <label for="{{ key }}">{{ f.label }}{% if f.required %} *{% endif %}</label>
+    {% if f.kind == "string" %}
+    <textarea id="{{ key }}" name="{{ key }}" rows="2">{{ values[key] }}</textarea>
+    {% elif f.kind == "integer" %}
+    <input id="{{ key }}" name="{{ key }}" type="number" step="1" value="{{ values[key] }}">
+    {% elif f.kind == "number" %}
+    <input id="{{ key }}" name="{{ key }}" type="number" step="any" value="{{ values[key] }}">
+    {% elif f.kind == "choice" %}
+    <select id="{{ key }}" name="{{ key }}">
+      {% if not f.required %}<option value=""></option>{% endif %}
+      {% for option_value, option_label in f.options %}
+      <option value="{{ option_value }}" {% if values[key] == option_value %}selected{% endif %}>{{ option_label }}</option>
+      {% endfor %}
+    </select>
+    {% elif f.kind == "lines" %}
+    <textarea id="{{ key }}" name="{{ key }}" rows="4">{{ values[key] }}</textarea>
+    <p class="hint">One item per line.</p>
+    {% else %}
+    <textarea id="{{ key }}" name="{{ key }}" rows="4" class="code" spellcheck="false">{{ values[key] }}</textarea>
+    <p class="hint">JSON.</p>
+    {% endif %}
+    {% endif %}
+    {% if f.description %}<p class="hint">{{ f.description }}</p>{% endif %}
+    {% endfor %}
+  {% else %}
+  <label for="properties-json">Properties (JSON)</label>
+  <textarea id="properties-json" name="properties_json" rows="12" class="code" spellcheck="false">{{ properties_json }}</textarea>
+  <p class="hint">{{ "This player's schema has no generated form, so the note is edited as JSON." if player.note_schema else "This player has no note schema, so the note is edited as JSON." }}</p>
+  {% endif %}
+
+  <label for="card-count">Number of cards</label>
+  <input id="card-count" name="card_count" type="number" min="1" max="1000" step="1" value="{{ card_count }}" required>
+  <p class="hint">How many cards this note makes. The player gets the card's index and decides what to show.</p>
+
+  {% if note %}
+  <label for="deck-id">Deck</label>
+  <select id="deck-id" name="deck_id">
+    {% for d in decks %}
+    <option value="{{ d.id }}" {% if d.id == selected_deck_id %}selected{% endif %}>{{ d.name }}</option>
+    {% endfor %}
+  </select>
+  <p class="hint">Moving a note to another deck puts it at the end of that deck.</p>
+  {% endif %}
+
+  {% if shrink %}
+  <div class="warning" role="alert">
+    <p>Reducing this note to {{ shrink.new_count }} card{{ "" if shrink.new_count == 1 else "s" }} permanently deletes the review progress of the removed cards ({{ shrink.card_states }} reviewed card{{ "" if shrink.card_states == 1 else "s" }}, {{ shrink.reviews }} logged review{{ "" if shrink.reviews == 1 else "s" }}).</p>
+    <label class="check"><input type="checkbox" name="confirm_shrink" value="1" required> Delete that progress and save</label>
+  </div>
+  {% endif %}
+
+  <div aria-live="polite">
+    {% if errors %}<ul class="error-list" role="alert">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+    {% if saved %}<p class="success">Saved.</p>{% endif %}
+  </div>
+  <div><button type="submit">{{ "Save changes" if note else "Create note" }}</button></div>
+</form>
+
+{% if note %}
+<section class="stack">
+  <h2>Media</h2>
+  <p class="hint">Files this note's cards can use. A player refers to a file by its hash, so put the hash in the note's properties where the player expects it.</p>
+  <form class="inline-form" method="post" action="/notes/{{ note.id }}/media" enctype="multipart/form-data"
+        hx-post="/notes/{{ note.id }}/media" hx-encoding="multipart/form-data"
+        hx-target="#note-media" hx-swap="innerHTML"
+        hx-on::after-request="if (event.detail.successful) { this.reset(); document.getElementById('media-form-error').innerHTML = ''; }">
+    <label for="media-file" class="visually-hidden">File to attach</label>
+    <input id="media-file" name="file" type="file" required>
+    <button type="submit">Upload</button>
+  </form>
+  <div id="media-form-error" aria-live="polite">{% if media_error %}<p class="error" role="alert">{{ media_error }}</p>{% endif %}</div>
+  <div id="note-media">
+    {% set note_id = note.id %}
+    {% include "_note_media.html" %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from dunzo.config import get_settings
 from dunzo.db import SCHEMA_VERSION, get_db, init_db
-from dunzo.routes import decks
+from dunzo.routes import decks, media, notes, players
 from dunzo.templating import STATIC_DIR
 
 
@@ -32,7 +32,10 @@ def create_app() -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(decks.router)
-    # Routers (players, notes, review, packages) are included here in later steps.
+    app.include_router(players.router)
+    app.include_router(notes.router)
+    app.include_router(media.router)
+    # Routers (review, packages) are included here in later steps.
     return app
 
 
