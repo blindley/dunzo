@@ -4,6 +4,7 @@
 {% if deck %}<p><a href="/decks/{{ deck.id }}">&larr; {{ deck.name }}</a></p>{% else %}<p><a href="/decks">&larr; Decks</a></p>{% endif %}
 <h1>{{ "Stats: " ~ deck.name if deck else "Stats" }}</h1>
 {% if not deck %}<p class="hint">All decks together. Open a deck to see its own stats.</p>{% endif %}
+{% if not stats.cards %}<p class="empty">No cards yet. Add notes to a deck and review them, and the numbers appear here.</p>{% endif %}
 
 <dl class="stats">
   <div><dt>Cards</dt><dd>{{ stats.cards }}</dd></div>

@@ -22,6 +22,9 @@
   <a class="button" href="/decks/{{ deck.id }}/stats">Stats</a>
   <a class="button" href="/decks/{{ deck.id }}/export">Export</a>
 </p>
+{% if deck.note_count and not (counts.due or counts.new) %}
+<p class="hint">Nothing to review right now. Cards come back when they are due.</p>
+{% endif %}
 <div id="note-list">
   {% include "_note_list.html" %}
 </div>

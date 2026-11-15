@@ -3,6 +3,11 @@
 {% block content %}
 <h1>Decks</h1>
 
+{% if not has_players %}
+<p class="hint">New here? Cards are shown by <em>players</em>, so start by
+  <a href="/players/new?starter=basic">creating the basic front/back player</a>, then create a deck and add notes to it.</p>
+{% endif %}
+
 <form class="inline-form" hx-post="/decks" hx-target="#deck-list" hx-swap="innerHTML"
       hx-on::after-request="if (event.detail.successful) { this.reset(); document.getElementById('deck-form-error').innerHTML = ''; }"
       method="post" action="/decks">

@@ -25,5 +25,5 @@
   {% endfor %}
 </ol>
 {% else %}
-<p class="empty">No notes in this deck yet.</p>
+<p class="empty">No notes in this deck yet. <a href="/decks/{{ deck.id }}/notes/new">Add the first note</a>.</p>
 {% endif %}

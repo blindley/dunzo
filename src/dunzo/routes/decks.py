@@ -29,6 +29,28 @@ def _deck_list(request: Request, db: sqlite3.Connection, status_code: int = 200)
     )
 
 
+def _decks_page(
+    request: Request,
+    db: sqlite3.Connection,
+    *,
+    error: str | None = None,
+    name: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    """The deck list page. `has_players` lets it point a new user at the starter player."""
+    return templates.TemplateResponse(
+        request,
+        "decks.html",
+        {
+            "decks": content_repo.list_decks(db),
+            "has_players": bool(content_repo.list_players(db)),
+            "error": error,
+            "name": name,
+        },
+        status_code=status_code,
+    )
+
+
 def _require_deck(db: sqlite3.Connection, deck_id: str) -> content_repo.Deck:
     deck = content_repo.get_deck(db, deck_id)
     if deck is None:
@@ -68,9 +90,7 @@ def index() -> RedirectResponse:
 
 @router.get("/decks", response_class=HTMLResponse)
 def decks_page(request: Request, db: Db) -> Response:
-    return templates.TemplateResponse(
-        request, "decks.html", {"decks": content_repo.list_decks(db)}
-    )
+    return _decks_page(request, db)
 
 
 @router.get("/decks/{deck_id}", response_class=HTMLResponse)
@@ -84,12 +104,7 @@ def create_deck(request: Request, db: Db, name: Annotated[str, Form()] = "") -> 
         content_repo.create_deck(db, name)
     except ValueError as exc:
         if not _is_htmx(request):
-            return templates.TemplateResponse(
-                request,
-                "decks.html",
-                {"decks": content_repo.list_decks(db), "error": str(exc), "name": name},
-                status_code=422,
-            )
+            return _decks_page(request, db, error=str(exc), name=name, status_code=422)
         # The page's script lets 422 responses swap; HX-Retarget sends them to the error slot.
         return templates.TemplateResponse(
             request,
