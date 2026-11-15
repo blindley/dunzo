@@ -206,6 +206,28 @@ def create_note(deck_id: str, request: Request, db: Db, form: Body) -> Response:
     return RedirectResponse(f"/decks/{deck.id}", status_code=303)
 
 
+@router.post("/decks/{deck_id}/notes/reorder", response_class=HTMLResponse)
+def reorder_notes(deck_id: str, request: Request, db: Db, form: Body) -> Response:
+    """Set the whole order of the deck's notes: the form field `order` repeated once per note id.
+
+    Used by the drag-and-drop on the deck page. The ids must be exactly the deck's notes, each
+    once; otherwise (a stale page, a note added or deleted elsewhere) nothing changes and the
+    answer is 409. Only note positions change, never progress.
+    """
+    deck = _require_deck(db, deck_id)
+    order = [str(value) for value in form.getlist("order")]
+    try:
+        content_repo.reorder_deck(db, deck.id, order)
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail="The notes in this deck have changed. Reload the page and try again.",
+        ) from None
+    if not _is_htmx(request):
+        return RedirectResponse(f"/decks/{deck.id}", status_code=303)
+    return _note_list(request, db, deck)
+
+
 @router.delete("/decks/{deck_id}/notes/{note_id}", response_class=HTMLResponse)
 def delete_note(deck_id: str, note_id: str, request: Request, db: Db) -> Response:
     deck = _require_deck(db, deck_id)

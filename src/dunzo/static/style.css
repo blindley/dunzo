@@ -119,6 +119,10 @@ input[type="number"] { max-width: 10rem; }
 .media-row { flex-wrap: wrap; }
 .hash { flex-basis: 100%; font-size: 0.75rem; color: var(--muted); overflow-wrap: anywhere;
   user-select: all; }
+.drag-handle { cursor: grab; color: var(--muted); user-select: none; letter-spacing: -0.15em;
+  padding: 0 0.15rem; }
+.drag-handle:active { cursor: grabbing; }
+.deck-row.dragging { opacity: 0.4; }
 
 /* ------------------------------------------------------------------- review */
 .player-frame { display: block; width: 100%; height: 70vh; min-height: 22rem; background: var(--surface);

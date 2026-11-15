@@ -25,7 +25,9 @@
 {% if deck.note_count and not (counts.due or counts.new) %}
 <p class="hint">Nothing to review right now. Cards come back when they are due.</p>
 {% endif %}
-<div id="note-list">
+<div id="note-list-error" class="error" role="alert"></div>
+<div id="note-list" data-reorder-url="/decks/{{ deck.id }}/notes/reorder">
   {% include "_note_list.html" %}
 </div>
+<script src="/static/note-reorder.js"></script>
 {% endblock %}

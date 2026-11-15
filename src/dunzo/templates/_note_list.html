@@ -1,7 +1,8 @@
 {% if notes %}
 <ol class="deck-list note-list">
   {% for note in notes %}
-  <li class="deck-row">
+  <li class="deck-row" data-note-id="{{ note.id }}">
+    {% if notes | length > 1 %}<span class="drag-handle" draggable="true" title="Drag to reorder" aria-hidden="true">&#x2807;&#x2807;</span>{% endif %}
     <a class="deck-name" href="/notes/{{ note.id }}">{{ note.properties | note_preview }}</a>
     <span class="deck-meta">{{ note.player_name }} · {{ note.card_count }} card{{ "" if note.card_count == 1 else "s" }}</span>
     <form class="inline" method="post" action="/decks/{{ deck.id }}/notes/{{ note.id }}/move"
