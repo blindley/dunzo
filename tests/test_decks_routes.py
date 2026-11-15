@@ -16,6 +16,10 @@ def deck_id_from(html: str) -> str:
     return html.split('hx-delete="/decks/')[1].split('"')[0]
 
 
+def make_deck(client, name="Deck") -> str:
+    return deck_id_from(client.post("/decks", data={"name": name}, headers=HX).text)
+
+
 def test_root_redirects_to_decks(client):
     r = client.get("/")
     assert r.status_code == 307
@@ -117,3 +121,68 @@ def test_delete_confirmation_mentions_notes_when_present(client, settings):
 def test_static_assets_served(client):
     assert client.get("/static/htmx.min.js").status_code == 200
     assert client.get("/static/style.css").status_code == 200
+
+
+# ---------------------------------------------------------------------------- rename
+
+
+def test_deck_page_has_rename_form_prefilled(client):
+    deck_id = make_deck(client, "Spanish")
+    page = client.get(f"/decks/{deck_id}").text
+    assert f'action="/decks/{deck_id}/rename"' in page
+    assert 'name="name"' in page and 'value="Spanish"' in page
+    assert "Renamed." not in page
+
+
+def test_rename_redirects_and_shows_the_new_name(client):
+    deck_id = make_deck(client, "Old")
+    r = client.post(f"/decks/{deck_id}/rename", data={"name": "  New   name "})
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/decks/{deck_id}?saved=1"
+    page = client.get(r.headers["location"]).text
+    assert "Renamed." in page and "<h1>New name</h1>" in page and 'value="New name"' in page
+    listing = client.get("/decks").text
+    assert "New name" in listing and ">Old<" not in listing
+
+
+def test_rename_keeps_the_deck_id_and_other_decks(client):
+    deck_id = make_deck(client, "Old")
+    make_deck(client, "Other")
+    client.post(f"/decks/{deck_id}/rename", data={"name": "New"})
+    assert client.get(f"/decks/{deck_id}").status_code == 200
+    listing = client.get("/decks").text
+    assert "Other" in listing and "New" in listing
+
+
+@pytest.mark.parametrize(
+    "name, message",
+    [("   ", "cannot be empty"), ("x" * 201, "longer than 200")],
+)
+def test_rename_errors_rerender_with_input_and_change_nothing(client, name, message):
+    deck_id = make_deck(client, "Keep")
+    r = client.post(f"/decks/{deck_id}/rename", data={"name": name})
+    assert r.status_code == 422
+    assert message in r.text and "<html" in r.text
+    assert name.strip() == "" or name in r.text  # what was typed is kept
+    assert "<h1>Keep</h1>" in r.text  # the heading still shows the stored name
+    assert "Renamed." not in r.text
+    assert "<h1>Keep</h1>" in client.get(f"/decks/{deck_id}").text
+
+
+def test_rename_missing_name_field_is_a_422_not_a_crash(client):
+    deck_id = make_deck(client, "Keep")
+    r = client.post(f"/decks/{deck_id}/rename", data={})
+    assert r.status_code == 422 and "cannot be empty" in r.text
+
+
+def test_rename_unknown_deck_is_404(client):
+    assert client.post("/decks/nope/rename", data={"name": "x"}).status_code == 404
+
+
+def test_rename_input_and_title_are_html_escaped(client):
+    deck_id = make_deck(client, "Plain")
+    client.post(f"/decks/{deck_id}/rename", data={"name": '"><script>alert(1)</script>'})
+    page = client.get(f"/decks/{deck_id}").text
+    assert "<script>alert" not in page and "&lt;script&gt;" in page
+    bad = client.post(f"/decks/{deck_id}/rename", data={"name": '"><b>' + "x" * 300})
+    assert "<b>" not in bad.text.split("<main>")[1]

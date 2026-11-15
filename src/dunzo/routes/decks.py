@@ -1,4 +1,4 @@
-"""Deck management pages: list, create, delete (server-rendered, HTMX for the interactions)."""
+"""Deck management pages: list, create, rename, delete (server-rendered, HTMX for the interactions)."""
 
 import sqlite3
 import time
@@ -29,6 +29,38 @@ def _deck_list(request: Request, db: sqlite3.Connection, status_code: int = 200)
     )
 
 
+def _require_deck(db: sqlite3.Connection, deck_id: str) -> content_repo.Deck:
+    deck = content_repo.get_deck(db, deck_id)
+    if deck is None:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    return deck
+
+
+def _deck_page(
+    request: Request,
+    db: sqlite3.Connection,
+    deck: content_repo.Deck,
+    *,
+    rename_value: str | None = None,
+    error: str | None = None,
+    saved: bool = False,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "deck.html",
+        {
+            "deck": deck,
+            "notes": content_repo.list_notes(db, deck.id),
+            "counts": review_queue.counts(db, deck.id, time.time()),
+            "rename_value": deck.name if rename_value is None else rename_value,
+            "error": error,
+            "saved": saved,
+        },
+        status_code=status_code,
+    )
+
+
 @router.get("/", include_in_schema=False)
 def index() -> RedirectResponse:
     return RedirectResponse("/decks", status_code=307)
@@ -42,19 +74,8 @@ def decks_page(request: Request, db: Db) -> Response:
 
 
 @router.get("/decks/{deck_id}", response_class=HTMLResponse)
-def deck_page(deck_id: str, request: Request, db: Db) -> Response:
-    deck = content_repo.get_deck(db, deck_id)
-    if deck is None:
-        raise HTTPException(status_code=404, detail="Deck not found")
-    return templates.TemplateResponse(
-        request,
-        "deck.html",
-        {
-            "deck": deck,
-            "notes": content_repo.list_notes(db, deck_id),
-            "counts": review_queue.counts(db, deck_id, time.time()),
-        },
-    )
+def deck_page(deck_id: str, request: Request, db: Db, saved: int = 0) -> Response:
+    return _deck_page(request, db, _require_deck(db, deck_id), saved=bool(saved))
 
 
 @router.post("/decks", response_class=HTMLResponse)
@@ -80,6 +101,20 @@ def create_deck(request: Request, db: Db, name: Annotated[str, Form()] = "") -> 
     if not _is_htmx(request):
         return RedirectResponse("/decks", status_code=303)
     return _deck_list(request, db)
+
+
+@router.post("/decks/{deck_id}/rename", response_class=HTMLResponse)
+def rename_deck(
+    deck_id: str, request: Request, db: Db, name: Annotated[str, Form()] = ""
+) -> Response:
+    """Rename a deck. A whole-page form: 303 back to the deck, or a 422 re-render that keeps
+    what the user typed."""
+    deck = _require_deck(db, deck_id)
+    try:
+        content_repo.rename_deck(db, deck.id, name)
+    except ValueError as exc:
+        return _deck_page(request, db, deck, rename_value=name, error=str(exc), status_code=422)
+    return RedirectResponse(f"/decks/{deck.id}?saved=1", status_code=303)
 
 
 @router.delete("/decks/{deck_id}", response_class=HTMLResponse)

@@ -58,6 +58,52 @@ def test_duplicate_names_allowed(conn):
     assert len(content_repo.list_decks(conn)) == 2
 
 
+def test_rename_normalizes_and_keeps_id_and_notes(conn):
+    deck = content_repo.create_deck(conn, "Old")
+    add_player_and_note(conn, deck.id)
+    renamed = content_repo.rename_deck(conn, deck.id, "  New   name ")
+    assert renamed.id == deck.id
+    assert renamed.name == "New name"
+    assert renamed.note_count == 1
+    assert content_repo.get_deck(conn, deck.id) == renamed
+
+
+def test_rename_changes_list_order_and_leaves_other_decks_alone(conn):
+    a = content_repo.create_deck(conn, "Apple")
+    b = content_repo.create_deck(conn, "Banana")
+    content_repo.rename_deck(conn, a.id, "Zebra")
+    assert [d.name for d in content_repo.list_decks(conn)] == ["Banana", "Zebra"]
+    assert content_repo.get_deck(conn, b.id).name == "Banana"
+
+
+def test_rename_allows_same_and_duplicate_names(conn):
+    a = content_repo.create_deck(conn, "A")
+    b = content_repo.create_deck(conn, "B")
+    assert content_repo.rename_deck(conn, a.id, "A").name == "A"
+    assert content_repo.rename_deck(conn, b.id, "A").name == "A"
+    assert [d.name for d in content_repo.list_decks(conn)] == ["A", "A"]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "x" * (content_repo.MAX_DECK_NAME_LENGTH + 1)])
+def test_rename_rejects_bad_names_and_changes_nothing(conn, bad):
+    deck = content_repo.create_deck(conn, "Keep")
+    with pytest.raises(ValueError):
+        content_repo.rename_deck(conn, deck.id, bad)
+    assert content_repo.get_deck(conn, deck.id).name == "Keep"
+
+
+def test_rename_missing_returns_none(conn):
+    assert content_repo.rename_deck(conn, "nope", "Name") is None
+
+
+def test_rename_never_touches_progress(conn):
+    deck = content_repo.create_deck(conn, "Old")
+    note_id = add_player_and_note(conn, deck.id)
+    conn.execute("INSERT INTO card_state VALUES (?, 0, 1.0, 'sm2', '{}')", (note_id,))
+    content_repo.rename_deck(conn, deck.id, "New")
+    assert conn.execute("SELECT COUNT(*) FROM card_state").fetchone()[0] == 1
+
+
 def test_delete_cascades_to_notes_and_progress(conn):
     deck = content_repo.create_deck(conn, "Doomed")
     other = content_repo.create_deck(conn, "Safe")

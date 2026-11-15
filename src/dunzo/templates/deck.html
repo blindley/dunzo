@@ -3,6 +3,17 @@
 {% block content %}
 <p><a href="/decks">&larr; Decks</a></p>
 <h1>{{ deck.name }}</h1>
+
+<form class="inline-form" method="post" action="/decks/{{ deck.id }}/rename">
+  <label for="deck-rename" class="visually-hidden">Deck name</label>
+  <input id="deck-rename" name="name" type="text" maxlength="200" value="{{ rename_value }}" required>
+  <button type="submit">Rename</button>
+</form>
+<div aria-live="polite">
+  {% if error %}{% include "_form_error.html" %}{% endif %}
+  {% if saved %}<p class="success">Renamed.</p>{% endif %}
+</div>
+
 <p>
   <a class="button" href="/decks/{{ deck.id }}/notes/new">Add note</a>
   {% if counts.due or counts.new %}

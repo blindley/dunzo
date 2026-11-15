@@ -121,6 +121,19 @@ def create_deck(conn: sqlite3.Connection, name: str) -> Deck:
     return Deck(id=deck_id, name=cleaned, note_count=0)
 
 
+def rename_deck(conn: sqlite3.Connection, deck_id: str, name: str) -> Deck | None:
+    """Change a deck's name. Returns the updated deck, or None if there is no such deck.
+
+    Raises ValueError if the name is invalid (the same rules as `create_deck`). Duplicate
+    names are allowed. Only the name changes: notes, their order and any progress are untouched.
+    """
+    cleaned = normalize_deck_name(name)
+    cursor = conn.execute("UPDATE deck SET name = ? WHERE id = ?", (cleaned, deck_id))
+    if cursor.rowcount == 0:
+        return None
+    return get_deck(conn, deck_id)
+
+
 def delete_deck(conn: sqlite3.Connection, deck_id: str) -> bool:
     """Delete a deck. Foreign keys cascade to its notes (and any progress for them).
 
