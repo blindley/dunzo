@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · dunzo{% endblock %}
+{% block content %}
+<section class="error-page">
+  <p class="error-status">{{ status }}</p>
+  <h1>{{ title }}</h1>
+  <p>{{ message }}</p>
+  <p><a class="button" href="/decks">Back to decks</a></p>
+</section>
+{% endblock %}

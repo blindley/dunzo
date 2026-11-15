@@ -98,6 +98,14 @@ input[type="number"] { max-width: 10rem; }
   border: 1px dashed var(--border); border-radius: var(--radius); }
 .warning { border: 1px solid var(--warn); border-radius: var(--radius); padding: 0.5rem 0.75rem;
   margin: 0.5rem 0; }
+.error-page { text-align: center; margin: 3rem auto; max-width: 30rem; }
+.error-status { font-size: 3.5rem; font-weight: 800; line-height: 1; margin: 0; color: var(--muted); }
+.toast { position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 20;
+  display: flex; align-items: center; gap: var(--gap); width: max-content;
+  max-width: min(36rem, calc(100% - 2rem)); padding: 0.6rem 0.9rem; background: var(--surface);
+  color: var(--danger); border: 1px solid var(--danger); border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2); }
+.toast[hidden] { display: none; }
 
 /* -------------------------------------------------------------------- lists */
 .deck-list { list-style: none; padding: 0; margin: 1rem 0; background: var(--surface);

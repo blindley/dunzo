@@ -19,6 +19,34 @@
         event.detail.isError = false;
       }
     });
+
+    // Anything else that goes wrong in an HTMX request (a 404 for a stale page, a 500, a lost
+    // connection) would otherwise fail silently: show it in the banner at the bottom.
+    function showRequestError(message) {
+      var banner = document.getElementById("htmx-error");
+      if (!banner) return;
+      document.getElementById("htmx-error-text").textContent = message;
+      banner.hidden = false;
+    }
+    document.addEventListener("htmx:responseError", function (event) {
+      var status = event.detail.xhr.status;
+      showRequestError(
+        status === 404
+          ? "That item no longer exists. Reload the page to see the current list."
+          : status === 503
+            ? "The database is busy. Try again in a moment."
+            : "Something went wrong on the server (error " + status + "). Your change was not saved."
+      );
+    });
+    document.addEventListener("htmx:sendError", function () {
+      showRequestError("Could not reach the server. Check that it is still running, then try again.");
+    });
+    document.addEventListener("htmx:timeout", function () {
+      showRequestError("The server took too long to answer. Try again.");
+    });
+    document.addEventListener("click", function (event) {
+      if (event.target.id === "htmx-error-close") document.getElementById("htmx-error").hidden = true;
+    });
   </script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -36,5 +64,9 @@
     {% block content %}{% endblock %}
   </main>
   {% endblock %}
+  <div id="htmx-error" class="toast" role="alert" hidden>
+    <span id="htmx-error-text"></span>
+    <button type="button" id="htmx-error-close" aria-label="Dismiss">Dismiss</button>
+  </div>
 </body>
 </html>

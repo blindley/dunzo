@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from dunzo.config import get_settings
 from dunzo.db import SCHEMA_VERSION, get_db, init_db
+from dunzo.errors import register_error_handlers
 from dunzo.routes import decks, media, notes, packages, players, review
 from dunzo.templating import STATIC_DIR
 
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="dunzo", lifespan=lifespan)
+    register_error_handlers(app)
 
     @app.get("/health")
     def health(db: Annotated[sqlite3.Connection, Depends(get_db)]) -> dict[str, str | int]:
