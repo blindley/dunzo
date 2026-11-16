@@ -5,7 +5,7 @@ import pytest
 
 from dunzo.db import SCHEMA_VERSION, connect, init_db
 
-CONTENT_TABLES = {"deck", "player", "note", "media", "note_media", "player_media"}
+CONTENT_TABLES = {"deck", "player", "player_file", "note", "media", "note_media"}
 PROGRESS_TABLES = {"card_state", "review_log"}
 
 
@@ -21,10 +21,7 @@ def add_deck(conn) -> str:
 
 def add_player(conn) -> str:
     player_id = uid()
-    conn.execute(
-        "INSERT INTO player (id, name, source, source_hash) VALUES (?, 'p', 'x', 'h')",
-        (player_id,),
-    )
+    conn.execute("INSERT INTO player (id, name, files_hash) VALUES (?, 'p', 'h')", (player_id,))
     return player_id
 
 
@@ -62,6 +59,16 @@ def test_newer_schema_version_is_refused(settings):
     c.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
     c.close()
     with pytest.raises(RuntimeError, match="newer"):
+        init_db()
+
+
+def test_older_schema_version_is_refused_with_advice(settings):
+    c = sqlite3.connect(settings.db_path)
+    c.execute("CREATE TABLE player (id TEXT PRIMARY KEY, name TEXT, source TEXT, source_hash TEXT)")
+    c.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+    c.commit()
+    c.close()
+    with pytest.raises(RuntimeError, match="no migration"):
         init_db()
 
 
@@ -136,6 +143,20 @@ def test_player_in_use_cannot_be_deleted(conn):
         conn.execute("DELETE FROM player WHERE id = ?", (p,))
 
 
+def test_player_files_belong_to_the_player(conn):
+    p = add_player(conn)
+    conn.execute("INSERT INTO player_file VALUES (?, 'index.html', 'abc', 'text/html', 3)", (p,))
+    conn.execute("INSERT INTO player_file VALUES (?, 'css/a.css', 'def', 'text/css', 3)", (p,))
+    with pytest.raises(sqlite3.IntegrityError):  # one row per path
+        conn.execute("INSERT INTO player_file VALUES (?, 'index.html', 'x', 'text/html', 1)", (p,))
+    with pytest.raises(sqlite3.IntegrityError):  # no empty files
+        conn.execute("INSERT INTO player_file VALUES (?, 'e.js', 'x', 'text/javascript', 0)", (p,))
+    with pytest.raises(sqlite3.IntegrityError):  # the player must exist
+        conn.execute("INSERT INTO player_file VALUES (?, 'index.html', 'x', 'text/html', 1)", (uid(),))
+    conn.execute("DELETE FROM player WHERE id = ?", (p,))
+    assert conn.execute("SELECT COUNT(*) FROM player_file").fetchone()[0] == 0
+
+
 def test_grade_must_be_1_to_4(conn):
     d, p = add_deck(conn), add_player(conn)
     n = add_note(conn, d, p)
@@ -162,7 +183,6 @@ def test_media_links_cascade_but_media_survives(conn):
     n = add_note(conn, d, p)
     conn.execute("INSERT INTO media VALUES ('abc', 'image/png', 3)")
     conn.execute("INSERT INTO note_media VALUES (?, 'abc')", (n,))
-    conn.execute("INSERT INTO player_media VALUES (?, 'abc')", (p,))
     conn.execute("DELETE FROM note WHERE id = ?", (n,))
     assert conn.execute("SELECT COUNT(*) FROM note_media").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 1

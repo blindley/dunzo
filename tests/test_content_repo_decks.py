@@ -8,7 +8,7 @@ from dunzo import content_repo
 def add_player_and_note(conn, deck_id, position=1024):
     player_id = str(uuid.uuid4())
     conn.execute(
-        "INSERT INTO player (id, name, source, source_hash) VALUES (?, 'p', 'x', 'h')",
+        "INSERT INTO player (id, name, files_hash) VALUES (?, 'p', 'h')",
         (player_id,),
     )
     note_id = str(uuid.uuid4())

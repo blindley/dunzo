@@ -4,18 +4,25 @@
 <p><a href="/players">&larr; Players</a></p>
 <h1>{{ player.name if player else "New player" }}</h1>
 
-<form class="stack" method="post" action="{{ '/players/' ~ player.id if player else '/players' }}">
+<form class="stack" method="post" enctype="multipart/form-data" action="{{ '/players/' ~ player.id if player else '/players' }}">
   <label for="player-name">Name</label>
   <input id="player-name" name="name" type="text" maxlength="200" value="{{ values.name }}" required>
-
-  <label for="player-source">Source (JavaScript)</label>
-  <textarea id="player-source" name="source" rows="18" class="code" spellcheck="false"
-            required>{{ values.source }}</textarea>
 
   <label for="player-schema">Note schema (JSON Schema, optional)</label>
   <textarea id="player-schema" name="note_schema" rows="8" class="code"
             spellcheck="false">{{ values.note_schema }}</textarea>
   <p class="hint">Notes using this player are checked against the schema, and it builds their edit form. Leave blank to edit notes as raw JSON.</p>
+
+  {% if not player %}
+  {% if starter %}<input type="hidden" name="starter" value="{{ starter }}">{% endif %}
+  <label for="player-zip">Player files (zip)</label>
+  <input id="player-zip" name="file" type="file" accept=".zip,application/zip"{% if not starter %} required{% endif %}>
+  {% if starter %}
+  <p class="hint">Leave this empty to create the player from the starter (index.html, style.css and player.js), or choose a zip to use your own files instead.</p>
+  {% else %}
+  <p class="hint">A zip of the player's files: a small web page with an index.html at its top level, plus any scripts, styles, images, audio, video or fonts it uses. Load <code>dunzo/api.js</code> and <code>dunzo/card.js</code> from index.html to get the card and report a grade.</p>
+  {% endif %}
+  {% endif %}
 
   <div aria-live="polite">
     {% if error %}{% include "_form_error.html" %}{% endif %}
@@ -26,21 +33,25 @@
 
 {% if player %}
 <section class="stack">
-  <h2>Media</h2>
-  <p class="hint">Files this player can use. Allowed: images, audio, video and fonts.</p>
-  <form class="inline-form" method="post" action="/players/{{ player.id }}/media" enctype="multipart/form-data"
-        hx-post="/players/{{ player.id }}/media" hx-encoding="multipart/form-data"
-        hx-target="#player-media" hx-swap="innerHTML"
-        hx-on::after-request="if (event.detail.successful) { this.reset(); document.getElementById('media-form-error').innerHTML = ''; }">
-    <label for="media-file" class="visually-hidden">File to attach</label>
-    <input id="media-file" name="file" type="file" required>
-    <button type="submit">Upload</button>
+  <h2>Files</h2>
+  <p class="hint">The player is this directory of files. <code>index.html</code> is the page shown for each card; the reserved <code>dunzo/</code> directory is provided by the app.</p>
+  {% if files %}
+  <ul class="deck-list">
+    {% for f in files %}
+    <li class="deck-row">
+      <code class="deck-name">{{ f.path }}</code>
+      <span class="deck-meta">{{ f.mime }}</span>
+      <span class="deck-meta">{{ f.size | filesize }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <form class="inline-form" method="post" action="/players/{{ player.id }}/files" enctype="multipart/form-data">
+    <label for="player-files-zip" class="visually-hidden">Zip with the player's files</label>
+    <input id="player-files-zip" name="file" type="file" accept=".zip,application/zip" required>
+    <button type="submit">Replace all files</button>
   </form>
-  <div id="media-form-error" aria-live="polite">{% if media_error %}<p class="error" role="alert">{{ media_error }}</p>{% endif %}</div>
-  <div id="player-media">
-    {% set player_id = player.id %}
-    {% include "_player_media.html" %}
-  </div>
+  <div aria-live="polite">{% if files_error %}<p class="error" role="alert">{{ files_error }}</p>{% endif %}</div>
 </section>
 {% endif %}
 {% endblock %}

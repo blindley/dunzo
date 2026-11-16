@@ -41,9 +41,10 @@ def serve_card_media(
 ) -> FileResponse:
     """Media for a player while it reviews a note's cards.
 
-    Only media linked to the note or to the note's player is served, so a player can resolve
-    just the hashes the host listed for its card. The player's frame has an opaque origin, so
-    fonts (which are fetched with CORS) need the wildcard; the bytes are not secret.
+    Only media linked to the note is served, so a player can resolve just the hashes the host
+    listed for its card. (A player's own files are served from its directory, not from here.)
+    The player's frame has an opaque origin, so fonts (which are fetched with CORS) need the
+    wildcard; the bytes are not secret.
     """
     if not _MEDIA_ID.fullmatch(media_id):
         raise HTTPException(status_code=404)

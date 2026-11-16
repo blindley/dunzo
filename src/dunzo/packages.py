@@ -3,23 +3,25 @@
 Content only. This module uses `content_repo` and nothing else from the app, so it cannot read
 or write progress (card_state, review_log): a package never contains any.
 
-Package layout (format version 1):
+Package layout (format version 2):
 
-    manifest.json           decks with their notes in deck order, players, media list
-    players/<id>.js         each player's source
+    manifest.json           decks with their notes in deck order, players (with their file
+                            lists), media list
+    players/<id>/<path>     each player's files, at the paths the player uses
     media/<sha256>          each media file's bytes
 
 Notes are stored as an ordered list inside their deck; position numbers are not exported, so
-import preserves the order without depending on them.
+import preserves the order without depending on them. Version 1 packages (a player was one
+JavaScript file) are no longer read.
 
 Import rules:
 - Everything is checked before anything is written (structure, names, card counts, every
-  note's properties against its player's schema, media references). A package that fails
-  those checks writes nothing.
+  player's files, every note's properties against its player's schema, media references). A
+  package that fails those checks writes nothing.
 - Decks and notes always get new ids, so importing never collides with existing content
   (importing the same package twice gives two copies of its decks).
-- Players keep their id. If a player with that id already exists with the same source and
-  schema it is reused. If it exists with different code or schema, the package's player is
+- Players keep their id. If a player with that id already exists with the same files and
+  schema it is reused. If it exists with different files or schema, the package's player is
   added as a separate copy with a new id; the existing player is never changed (there is no
   player versioning in v1).
 - Media is content-addressed, so files already present are not stored twice. Each file's
@@ -41,7 +43,7 @@ from typing import Any, BinaryIO
 from dunzo import content_repo
 
 FORMAT = "dunzo-package"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 MANIFEST_NAME = "manifest.json"
 
 MAX_MANIFEST_BYTES = 20 * 1024 * 1024
@@ -60,7 +62,7 @@ class ImportResult:
     decks: int
     notes: int
     players_added: int  # new players, including copies made because an id was taken
-    players_reused: int  # players already present with identical source and schema
+    players_reused: int  # players already present with identical files and schema
     media: int  # media files in the package
 
 
@@ -72,12 +74,12 @@ def write_package(
 ) -> None:
     """Write a package with the given decks (in the given order) to a binary file object.
 
-    Includes the players those decks' notes use and every media file linked to the notes or
-    to those players. Raises PackageError for an unknown deck or a media file missing on disk.
+    Includes the players those decks' notes use (with all their files) and every media file
+    linked to the notes. Raises PackageError for an unknown deck or a file missing on disk.
     """
     decks_out: list[dict[str, Any]] = []
     players: dict[str, content_repo.Player] = {}
-    player_media: dict[str, list[str]] = {}
+    player_files: dict[str, list[content_repo.PlayerFile]] = {}
     media: dict[str, content_repo.Media] = {}
 
     for deck_id in dict.fromkeys(deck_ids):
@@ -90,9 +92,7 @@ def write_package(
                 player = content_repo.get_player(conn, note.player_id)
                 assert player is not None  # the foreign key guarantees it
                 players[player.id] = player
-                linked = content_repo.list_player_media(conn, player.id)
-                player_media[player.id] = [m.id for m in linked]
-                media.update({m.id: m for m in linked})
+                player_files[player.id] = content_repo.list_player_files(conn, player.id)
             linked = content_repo.list_note_media(conn, note.id)
             media.update({m.id: m for m in linked})
             notes_out.append(
@@ -115,7 +115,7 @@ def write_package(
                 "id": p.id,
                 "name": p.name,
                 "note_schema": json.loads(p.note_schema) if p.note_schema else None,
-                "media": player_media[p.id],
+                "files": [f.path for f in player_files[p.id]],
             }
             for p in players.values()
         ],
@@ -125,7 +125,11 @@ def write_package(
     with zipfile.ZipFile(fileobj, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2, ensure_ascii=False))
         for p in players.values():
-            zf.writestr(f"players/{p.id}.js", p.source)
+            for f in player_files[p.id]:
+                path = media_dir / f.hash
+                if not path.is_file():
+                    raise PackageError(f"A file of player “{p.name}” ({f.path}) is missing on disk.")
+                zf.write(path, f"players/{p.id}/{f.path}")
         for m in media.values():
             path = media_dir / m.id
             if not path.is_file():
@@ -140,9 +144,9 @@ def write_package(
 class _PlayerPlan:
     id: str
     name: str
-    source: str
+    files: dict[str, bytes]
+    files_hash: str
     schema: str | None  # normalized, as stored
-    media: list[str]
 
 
 @dataclass
@@ -238,6 +242,11 @@ def _read_manifest(zf: zipfile.ZipFile) -> dict[str, Any]:
             f"The package is format version {version}; this app understands up to "
             f"version {FORMAT_VERSION}. Upgrade the app to import it."
         )
+    if version < FORMAT_VERSION:
+        raise PackageError(
+            f"The package is format version {version}, which this app no longer reads "
+            f"(it reads version {FORMAT_VERSION}: a player is a directory of files)."
+        )
     return manifest
 
 
@@ -249,6 +258,39 @@ def _canonical_uuid(value: Any, what: str) -> str:
     if canonical != value:
         raise PackageError(f"{what}: “id” must be a lower-case UUID.")
     return canonical
+
+
+def _parse_player(
+    entry: dict[str, Any], what: str, zf: zipfile.ZipFile
+) -> _PlayerPlan:
+    player_id = _canonical_uuid(entry.get("id"), what)
+    try:
+        name = content_repo.normalize_player_name(_string(entry, "name", what))
+        files: dict[str, bytes] = {}
+        for raw_path in _array(entry.get("files", []), f"{what}: files"):
+            if not isinstance(raw_path, str):
+                raise PackageError(f"{what}: file paths must be text.")
+            path = content_repo.normalize_player_path(raw_path)
+            if path in files:
+                raise PackageError(f"{what}: “{path}” is listed twice.")
+            files[path] = _read_member(
+                zf,
+                f"players/{player_id}/{path}",
+                content_repo.MAX_PLAYER_FILE_BYTES,
+                f"file “{path}” of player “{name}”",
+            )
+        files = content_repo.check_player_files(files)
+        raw_schema = entry.get("note_schema")
+        if raw_schema is not None and not isinstance(raw_schema, dict):
+            raise PackageError(f"{what}: “note_schema” must be an object or null.")
+        schema = content_repo.normalize_note_schema(
+            None if raw_schema is None else json.dumps(raw_schema)
+        )
+    except PackageError:
+        raise
+    except ValueError as exc:
+        raise PackageError(f"{what}: {exc}") from None
+    return _PlayerPlan(player_id, name, files, content_repo.hash_player_files(files), schema)
 
 
 def _parse(
@@ -276,35 +318,10 @@ def _parse(
     players: dict[str, _PlayerPlan] = {}
     for i, entry in enumerate(_array(manifest.get("players", []), "players"), start=1):
         what = f"Player {i}"
-        entry = _object(entry, what)
-        player_id = _canonical_uuid(entry.get("id"), what)
-        if player_id in players:
+        plan = _parse_player(_object(entry, what), what, zf)
+        if plan.id in players:
             raise PackageError(f"{what}: listed twice.")
-        try:
-            name = content_repo.normalize_player_name(_string(entry, "name", what))
-            source_bytes = _read_member(
-                zf,
-                f"players/{player_id}.js",
-                content_repo.MAX_PLAYER_SOURCE_BYTES,
-                f"source of player “{name}”",
-            )
-            try:
-                source = content_repo.normalize_player_source(source_bytes.decode("utf-8"))
-            except UnicodeDecodeError:
-                raise PackageError(f"{what}: the source is not valid UTF-8 text.") from None
-            raw_schema = entry.get("note_schema")
-            if raw_schema is not None and not isinstance(raw_schema, dict):
-                raise PackageError(f"{what}: “note_schema” must be an object or null.")
-            schema = content_repo.normalize_note_schema(
-                None if raw_schema is None else json.dumps(raw_schema)
-            )
-        except PackageError:
-            raise
-        except ValueError as exc:
-            raise PackageError(f"{what}: {exc}") from None
-        players[player_id] = _PlayerPlan(
-            player_id, name, source, schema, _media_refs(entry, declared, what)
-        )
+        players[plan.id] = plan
 
     decks: list[_DeckPlan] = []
     for i, entry in enumerate(_array(manifest.get("decks", []), "decks"), start=1):
@@ -360,18 +377,18 @@ def import_package(conn: sqlite3.Connection, media_dir: Path, fileobj: BinaryIO)
             existing = content_repo.get_player(conn, plan.id)
             if existing is None:
                 local = content_repo.create_player(
-                    conn, plan.name, plan.source, plan.schema, player_id=plan.id
+                    conn, plan.name, plan.files, plan.schema, player_id=plan.id, media_dir=media_dir
                 ).id
                 added += 1
-            elif existing.source == plan.source and existing.note_schema == plan.schema:
+            elif existing.files_hash == plan.files_hash and existing.note_schema == plan.schema:
                 local = existing.id
                 reused += 1
-            else:  # same id, different code: keep both, never overwrite
-                local = content_repo.create_player(conn, plan.name, plan.source, plan.schema).id
+            else:  # same id, different files or schema: keep both, never overwrite
+                local = content_repo.create_player(
+                    conn, plan.name, plan.files, plan.schema, media_dir=media_dir
+                ).id
                 added += 1
             player_ids[plan.id] = local
-            for media_id in plan.media:
-                content_repo.link_player_media(conn, local, media_id)
 
         note_count = 0
         for deck_plan in decks:

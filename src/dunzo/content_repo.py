@@ -1,11 +1,12 @@
-"""SQL for content tables (deck, player, note, media and their link tables).
+"""SQL for content tables (deck, player, player_file, note, media and the note_media link).
 
 Content only: nothing here may touch card_state or review_log (see progress_repo.py).
 Functions take an open connection and do not commit; the request-scoped connection from
 `dunzo.db.get_db` commits on success.
 
-The one non-SQL exception is `add_media`, which also writes the media bytes to
-`<media_dir>/<sha256>` (the media table only holds the metadata).
+The non-SQL exceptions are `add_media` and the player-file functions (`create_player`,
+`replace_player_files`), which also write bytes to `<media_dir>/<sha256>`. The media table and
+the player_file table only hold the metadata. `media_dir` defaults to the configured one.
 """
 
 import hashlib
@@ -15,6 +16,7 @@ import sqlite3
 import tempfile
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -23,13 +25,25 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from referencing.exceptions import Unresolvable
 
+from dunzo import player_files
+from dunzo.config import get_settings
+
 MAX_DECK_NAME_LENGTH = 200
 MAX_PLAYER_NAME_LENGTH = 200
-MAX_PLAYER_SOURCE_BYTES = 1_000_000
 MAX_MEDIA_BYTES = 50 * 1024 * 1024
 MAX_CARD_COUNT = 1000
 POSITION_GAP = 1024  # spacing of note.position values within a deck
 _CHUNK = 1024 * 1024
+
+# The rules for a player's files live in the pure player_files module; they are re-exported
+# here so that packages.py (which may only use content_repo) can use them.
+PLAYER_INDEX = player_files.INDEX
+PLAYER_RESERVED_DIR = player_files.RESERVED_DIR
+MAX_PLAYER_FILE_BYTES = player_files.MAX_FILE_BYTES
+normalize_player_path = player_files.normalize_path
+check_player_files = player_files.check_files
+hash_player_files = player_files.hash_files
+read_player_zip = player_files.read_zip
 
 # Media types the app will store and serve. Anything else is refused at upload.
 ALLOWED_MEDIA_TYPES = frozenset(
@@ -72,6 +86,28 @@ def _normalize_name(name: str, label: str, max_length: int) -> str:
     if len(cleaned) > max_length:
         raise ValueError(f"{label} name cannot be longer than {max_length} characters.")
     return cleaned
+
+
+def _media_dir(media_dir: Path | None) -> Path:
+    return media_dir if media_dir is not None else get_settings().media_dir
+
+
+def _store_bytes(media_dir: Path, data: bytes) -> str:
+    """Write the bytes to `<media_dir>/<sha256>` (once) and return the hash."""
+    digest = hashlib.sha256(data).hexdigest()
+    final_path = media_dir / digest
+    if not final_path.exists():
+        media_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=media_dir, prefix=".upload-")
+        try:
+            with os.fdopen(fd, "wb") as tmp:
+                tmp.write(data)
+            os.replace(tmp_name, final_path)
+        except BaseException:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+            raise
+    return digest
 
 
 # ------------------------------------------------------------------------------ decks
@@ -150,26 +186,21 @@ def delete_deck(conn: sqlite3.Connection, deck_id: str) -> bool:
 class Player:
     id: str
     name: str
-    source: str
-    source_hash: str
+    files_hash: str  # identifies the player's whole file set (see player_files.hash_files)
     note_schema: str | None  # JSON Schema as text, or None
     note_count: int
 
 
+@dataclass(frozen=True)
+class PlayerFile:
+    path: str  # relative, '/'-separated
+    hash: str  # sha256 of the bytes; also the file's name in the media directory
+    mime: str
+    size: int
+
+
 def normalize_player_name(name: str) -> str:
     return _normalize_name(name, "Player", MAX_PLAYER_NAME_LENGTH)
-
-
-def normalize_player_source(source: str) -> str:
-    """Check the JavaScript text and normalize line endings (so its hash is stable)."""
-    text = source.replace("\r\n", "\n").replace("\r", "\n")
-    if not text.strip():
-        raise ValueError("Player source cannot be empty.")
-    if len(text.encode("utf-8")) > MAX_PLAYER_SOURCE_BYTES:
-        raise ValueError(
-            f"Player source cannot be larger than {MAX_PLAYER_SOURCE_BYTES // 1000} KB."
-        )
-    return text
 
 
 def normalize_note_schema(text: str | None) -> str | None:
@@ -195,12 +226,18 @@ def normalize_note_schema(text: str | None) -> str | None:
     return json.dumps(schema, indent=2, ensure_ascii=False)
 
 
-def _hash_source(source: str) -> str:
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+def _as_files(files: str | Mapping[str, bytes]) -> Mapping[str, bytes]:
+    """A string is shorthand for a player that is just an index.html with that text."""
+    if isinstance(files, str):
+        text = files.replace("\r\n", "\n").replace("\r", "\n")
+        if not text.strip():
+            raise ValueError("The player's index.html cannot be empty.")
+        return {PLAYER_INDEX: text.encode("utf-8")}
+    return files
 
 
 _PLAYER_SELECT = """
-    SELECT p.id, p.name, p.source, p.source_hash, p.note_schema, COUNT(n.id) AS note_count
+    SELECT p.id, p.name, p.files_hash, p.note_schema, COUNT(n.id) AS note_count
     FROM player p
     LEFT JOIN note n ON n.player_id = p.id
 """
@@ -210,8 +247,7 @@ def _player_from_row(row: sqlite3.Row) -> Player:
     return Player(
         id=row["id"],
         name=row["name"],
-        source=row["source"],
-        source_hash=row["source_hash"],
+        files_hash=row["files_hash"],
         note_schema=row["note_schema"],
         note_count=row["note_count"],
     )
@@ -230,57 +266,114 @@ def get_player(conn: sqlite3.Connection, player_id: str) -> Player | None:
     return _player_from_row(row) if row else None
 
 
+def _store_player_files(
+    conn: sqlite3.Connection, media_dir: Path, player_id: str, files: Mapping[str, bytes]
+) -> None:
+    for path, data in sorted(files.items()):
+        digest = _store_bytes(media_dir, data)
+        conn.execute(
+            "INSERT INTO player_file (player_id, path, hash, mime, size) VALUES (?, ?, ?, ?, ?)",
+            (player_id, path, digest, player_files.file_type(path), len(data)),
+        )
+
+
 def create_player(
     conn: sqlite3.Connection,
     name: str,
-    source: str,
+    files: str | Mapping[str, bytes],
     note_schema: str | None = None,
     player_id: str | None = None,
+    media_dir: Path | None = None,
 ) -> Player:
-    """Create a player. Raises ValueError if the name, source or schema is invalid.
+    """Create a player from its files: a {path: bytes} mapping (it needs an `index.html`), or a
+    string, which is shorthand for a player consisting of just an index.html with that text.
+
+    Raises ValueError if the name, files or schema is invalid. Nothing is written then.
 
     The id is a new UUID unless `player_id` is given (package import keeps a player's id so
     the same player is recognised across installations). The caller makes sure it is unused.
     """
     cleaned_name = normalize_player_name(name)
-    cleaned_source = normalize_player_source(source)
+    checked = player_files.check_files(_as_files(files))
     schema = normalize_note_schema(note_schema)
     player_id = player_id or str(uuid.uuid4())
-    source_hash = _hash_source(cleaned_source)
+    files_hash = player_files.hash_files(checked)
     conn.execute(
-        "INSERT INTO player (id, name, source, source_hash, note_schema) VALUES (?, ?, ?, ?, ?)",
-        (player_id, cleaned_name, cleaned_source, source_hash, schema),
+        "INSERT INTO player (id, name, files_hash, note_schema) VALUES (?, ?, ?, ?)",
+        (player_id, cleaned_name, files_hash, schema),
     )
-    return Player(player_id, cleaned_name, cleaned_source, source_hash, schema, 0)
+    _store_player_files(conn, _media_dir(media_dir), player_id, checked)
+    return Player(player_id, cleaned_name, files_hash, schema, 0)
 
 
 def update_player(
-    conn: sqlite3.Connection,
-    player_id: str,
-    name: str,
-    source: str,
-    note_schema: str | None,
+    conn: sqlite3.Connection, player_id: str, name: str, note_schema: str | None
 ) -> Player | None:
-    """Replace a player's name, source and schema. Returns None if there is no such player.
+    """Change a player's name and note schema (not its files: see `replace_player_files`).
 
-    Raises ValueError if the new values are invalid. There is no versioning in v1: notes
-    that use the player simply get the new code. Existing notes are not re-validated
-    against a changed schema.
+    Returns None if there is no such player. Raises ValueError if the new values are invalid.
+    There is no versioning in v1: notes that use the player simply get the new code, and
+    existing notes are not re-validated against a changed schema.
     """
     cleaned_name = normalize_player_name(name)
-    cleaned_source = normalize_player_source(source)
     schema = normalize_note_schema(note_schema)
     cursor = conn.execute(
-        "UPDATE player SET name = ?, source = ?, source_hash = ?, note_schema = ? WHERE id = ?",
-        (cleaned_name, cleaned_source, _hash_source(cleaned_source), schema, player_id),
+        "UPDATE player SET name = ?, note_schema = ? WHERE id = ?",
+        (cleaned_name, schema, player_id),
     )
     if cursor.rowcount == 0:
         return None
     return get_player(conn, player_id)
 
 
+def replace_player_files(
+    conn: sqlite3.Connection,
+    player_id: str,
+    files: str | Mapping[str, bytes],
+    media_dir: Path | None = None,
+) -> Player | None:
+    """Replace all of a player's files with a new set (same rules as `create_player`).
+
+    Returns None if there is no such player. Raises ValueError for an invalid file set, in
+    which case the player keeps its current files. Bytes of files that are no longer used stay
+    in the media directory (garbage collection is deferred).
+    """
+    if get_player(conn, player_id) is None:
+        return None
+    checked = player_files.check_files(_as_files(files))
+    conn.execute("DELETE FROM player_file WHERE player_id = ?", (player_id,))
+    _store_player_files(conn, _media_dir(media_dir), player_id, checked)
+    conn.execute(
+        "UPDATE player SET files_hash = ? WHERE id = ?",
+        (player_files.hash_files(checked), player_id),
+    )
+    return get_player(conn, player_id)
+
+
+def _file_from_row(row: sqlite3.Row) -> PlayerFile:
+    return PlayerFile(path=row["path"], hash=row["hash"], mime=row["mime"], size=row["size"])
+
+
+def list_player_files(conn: sqlite3.Connection, player_id: str) -> list[PlayerFile]:
+    """A player's files, sorted by path."""
+    rows = conn.execute(
+        "SELECT path, hash, mime, size FROM player_file WHERE player_id = ? ORDER BY path",
+        (player_id,),
+    ).fetchall()
+    return [_file_from_row(r) for r in rows]
+
+
+def get_player_file(conn: sqlite3.Connection, player_id: str, path: str) -> PlayerFile | None:
+    """One file of a player, by its exact path, or None."""
+    row = conn.execute(
+        "SELECT path, hash, mime, size FROM player_file WHERE player_id = ? AND path = ?",
+        (player_id, path),
+    ).fetchone()
+    return _file_from_row(row) if row else None
+
+
 def delete_player(conn: sqlite3.Connection, player_id: str) -> bool:
-    """Delete a player and its media links (the media itself stays).
+    """Delete a player and its file rows (the bytes stay until garbage collection exists).
 
     Raises PlayerInUse if any note uses the player. Returns False if there was no such player.
     """
@@ -360,30 +453,6 @@ def add_media(
         return existing
     conn.execute("INSERT INTO media (id, mime, size) VALUES (?, ?, ?)", (media_id, cleaned_mime, size))
     return Media(media_id, cleaned_mime, size)
-
-
-def link_player_media(conn: sqlite3.Connection, player_id: str, media_id: str) -> None:
-    conn.execute(
-        "INSERT OR IGNORE INTO player_media (player_id, media_id) VALUES (?, ?)",
-        (player_id, media_id),
-    )
-
-
-def unlink_player_media(conn: sqlite3.Connection, player_id: str, media_id: str) -> bool:
-    """Remove the link only; the media row and file stay (garbage collection is deferred)."""
-    cursor = conn.execute(
-        "DELETE FROM player_media WHERE player_id = ? AND media_id = ?", (player_id, media_id)
-    )
-    return cursor.rowcount > 0
-
-
-def list_player_media(conn: sqlite3.Connection, player_id: str) -> list[Media]:
-    rows = conn.execute(
-        "SELECT m.id, m.mime, m.size FROM player_media pm JOIN media m ON m.id = pm.media_id"
-        " WHERE pm.player_id = ? ORDER BY m.mime, m.id",
-        (player_id,),
-    ).fetchall()
-    return [_media_from_row(r) for r in rows]
 
 
 # ----------------------------------------------------------------------------- notes
@@ -657,28 +726,20 @@ def list_note_media(conn: sqlite3.Connection, note_id: str) -> list[Media]:
 
 # ------------------------------------------------------------ media a card may use
 
-# A card (note + player) may use the media linked to the note and the media linked to the
-# note's player. This is the set a player can resolve to URLs while reviewing.
-_CARD_MEDIA_SELECT = """
-    SELECT m.id, m.mime, m.size FROM media m
-    WHERE m.id IN (
-        SELECT media_id FROM note_media WHERE note_id = :note
-        UNION
-        SELECT pm.media_id FROM player_media pm JOIN note n ON n.player_id = pm.player_id
-        WHERE n.id = :note
-    )
-"""
+# A card may use the media linked to its note. (A player's own files are not media: they are
+# served from the player's directory.) This is the set a player can resolve to URLs.
 
 
 def list_card_media(conn: sqlite3.Connection, note_id: str) -> list[Media]:
-    """Media attached to the note plus media attached to its player (each once)."""
-    rows = conn.execute(_CARD_MEDIA_SELECT + " ORDER BY m.mime, m.id", {"note": note_id})
-    return [_media_from_row(r) for r in rows.fetchall()]
+    """The media attached to the note."""
+    return list_note_media(conn, note_id)
 
 
 def get_card_media(conn: sqlite3.Connection, note_id: str, media_id: str) -> Media | None:
     """The media record if the note's cards may use it, otherwise None."""
     row = conn.execute(
-        _CARD_MEDIA_SELECT + " AND m.id = :media", {"note": note_id, "media": media_id}
+        "SELECT m.id, m.mime, m.size FROM note_media nm JOIN media m ON m.id = nm.media_id"
+        " WHERE nm.note_id = ? AND nm.media_id = ?",
+        (note_id, media_id),
     ).fetchone()
     return _media_from_row(row) if row else None

@@ -1,4 +1,4 @@
-"""Player management: list, create, edit, delete, and the media attached to a player."""
+"""Player management: list, create (from a zip or a starter), edit, replace files, delete."""
 
 import sqlite3
 from typing import Annotated
@@ -15,9 +15,9 @@ router = APIRouter()
 
 Db = Annotated[sqlite3.Connection, Depends(get_db)]
 
-
-def _is_htmx(request: Request) -> bool:
-    return request.headers.get("HX-Request") == "true"
+NEED_ZIP = (
+    "Choose a zip file with the player's files (it needs an index.html at its top level)."
+)
 
 
 def _require_player(db: sqlite3.Connection, player_id: str) -> content_repo.Player:
@@ -39,23 +39,16 @@ def _player_list(
     )
 
 
-def _media_list(request: Request, db: sqlite3.Connection, player_id: str) -> Response:
-    return templates.TemplateResponse(
-        request,
-        "_player_media.html",
-        {"player_id": player_id, "media_list": content_repo.list_player_media(db, player_id)},
-    )
-
-
 def _form_page(
     request: Request,
     db: sqlite3.Connection,
     *,
     player: content_repo.Player | None,
     values: dict[str, str],
+    starter: str = "",
     error: str | None = None,
     saved: bool = False,
-    media_error: str | None = None,
+    files_error: str | None = None,
     status_code: int = 200,
 ) -> Response:
     return templates.TemplateResponse(
@@ -64,17 +57,25 @@ def _form_page(
         {
             "player": player,
             "values": values,
+            "starter": starter,
             "error": error,
             "saved": saved,
-            "media_error": media_error,
-            "media_list": content_repo.list_player_media(db, player.id) if player else [],
+            "files_error": files_error,
+            "files": content_repo.list_player_files(db, player.id) if player else [],
         },
         status_code=status_code,
     )
 
 
 def _values_of(player: content_repo.Player) -> dict[str, str]:
-    return {"name": player.name, "source": player.source, "note_schema": player.note_schema or ""}
+    return {"name": player.name, "note_schema": player.note_schema or ""}
+
+
+def _zip_files(file: UploadFile | None) -> dict[str, bytes] | None:
+    """The files in an uploaded zip, or None if no file was chosen. Raises ValueError."""
+    if file is None or not file.filename:
+        return None
+    return content_repo.read_player_zip(file.file)
 
 
 @router.get("/players", response_class=HTMLResponse)
@@ -86,10 +87,16 @@ def players_page(request: Request, db: Db) -> Response:
 
 @router.get("/players/new", response_class=HTMLResponse)
 def new_player_page(request: Request, db: Db, starter: str = "") -> Response:
-    # ?starter=basic prefills the form with a ready-made player; nothing is saved until the
-    # user submits it. An unknown starter gives the blank form.
-    values = starter_players.get_starter(starter) or {"name": "", "source": "", "note_schema": ""}
-    return _form_page(request, db, player=None, values=values)
+    # ?starter=basic prefills the name and schema; submitting without a zip then creates the
+    # player from the starter's files. Nothing is saved until the form is submitted. An
+    # unknown starter gives the blank form.
+    preset = starter_players.get_starter(starter)
+    values = (
+        {"name": preset["name"], "note_schema": preset["note_schema"]}
+        if preset
+        else {"name": "", "note_schema": ""}
+    )
+    return _form_page(request, db, player=None, values=values, starter=starter if preset else "")
 
 
 @router.post("/players", response_class=HTMLResponse)
@@ -97,14 +104,25 @@ def create_player(
     request: Request,
     db: Db,
     name: Annotated[str, Form()] = "",
-    source: Annotated[str, Form()] = "",
     note_schema: Annotated[str, Form()] = "",
+    starter: Annotated[str, Form()] = "",
+    file: Annotated[UploadFile | None, File()] = None,
 ) -> Response:
     try:
-        player = content_repo.create_player(db, name, source, note_schema)
+        files = _zip_files(file)
+        if files is None:
+            preset = starter_players.get_starter(starter) if starter else None
+            if preset is None:
+                raise ValueError(NEED_ZIP)
+            files = preset["files"]
+        player = content_repo.create_player(
+            db, name, files, note_schema, media_dir=get_settings().media_dir
+        )
     except ValueError as exc:
-        values = {"name": name, "source": source, "note_schema": note_schema}
-        return _form_page(request, db, player=None, values=values, error=str(exc), status_code=422)
+        values = {"name": name, "note_schema": note_schema}
+        return _form_page(
+            request, db, player=None, values=values, starter=starter, error=str(exc), status_code=422
+        )
     return RedirectResponse(f"/players/{player.id}?saved=1", status_code=303)
 
 
@@ -120,15 +138,40 @@ def update_player(
     request: Request,
     db: Db,
     name: Annotated[str, Form()] = "",
-    source: Annotated[str, Form()] = "",
     note_schema: Annotated[str, Form()] = "",
 ) -> Response:
     player = _require_player(db, player_id)
     try:
-        content_repo.update_player(db, player_id, name, source, note_schema)
+        content_repo.update_player(db, player_id, name, note_schema)
     except ValueError as exc:
-        values = {"name": name, "source": source, "note_schema": note_schema}
+        values = {"name": name, "note_schema": note_schema}
         return _form_page(request, db, player=player, values=values, error=str(exc), status_code=422)
+    return RedirectResponse(f"/players/{player_id}?saved=1", status_code=303)
+
+
+@router.post("/players/{player_id}/files", response_class=HTMLResponse)
+def replace_player_files(
+    player_id: str,
+    request: Request,
+    db: Db,
+    file: Annotated[UploadFile | None, File()] = None,
+) -> Response:
+    """Replace all of the player's files with the contents of an uploaded zip."""
+    player = _require_player(db, player_id)
+    try:
+        files = _zip_files(file)
+        if files is None:
+            raise ValueError(NEED_ZIP)
+        content_repo.replace_player_files(db, player_id, files, media_dir=get_settings().media_dir)
+    except ValueError as exc:
+        return _form_page(
+            request,
+            db,
+            player=player,
+            values=_values_of(player),
+            files_error=str(exc),
+            status_code=422,
+        )
     return RedirectResponse(f"/players/{player_id}?saved=1", status_code=303)
 
 
@@ -151,45 +194,3 @@ def delete_player(player_id: str, request: Request, db: Db) -> Response:
             headers={"HX-Retarget": "#player-list-error", "HX-Reswap": "innerHTML"},
         )
     return _player_list(request, db)
-
-
-@router.post("/players/{player_id}/media", response_class=HTMLResponse)
-def upload_player_media(
-    player_id: str,
-    request: Request,
-    db: Db,
-    file: Annotated[UploadFile | None, File()] = None,
-) -> Response:
-    player = _require_player(db, player_id)
-    try:
-        if file is None or not file.filename:
-            raise ValueError("Choose a file to upload.")
-        media = content_repo.add_media(db, get_settings().media_dir, file.file, file.content_type)
-        content_repo.link_player_media(db, player_id, media.id)
-    except ValueError as exc:
-        if _is_htmx(request):
-            return templates.TemplateResponse(
-                request,
-                "_form_error.html",
-                {"error": str(exc)},
-                status_code=422,
-                headers={"HX-Retarget": "#media-form-error", "HX-Reswap": "innerHTML"},
-            )
-        return _form_page(
-            request,
-            db,
-            player=player,
-            values=_values_of(player),
-            media_error=str(exc),
-            status_code=422,
-        )
-    if not _is_htmx(request):
-        return RedirectResponse(f"/players/{player_id}", status_code=303)
-    return _media_list(request, db, player_id)
-
-
-@router.delete("/players/{player_id}/media/{media_id}", response_class=HTMLResponse)
-def unlink_player_media(player_id: str, media_id: str, request: Request, db: Db) -> Response:
-    _require_player(db, player_id)
-    content_repo.unlink_player_media(db, player_id, media_id)  # idempotent
-    return _media_list(request, db, player_id)

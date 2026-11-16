@@ -1,9 +1,12 @@
 import hashlib
+import io
 
 import pytest
 from fastapi.testclient import TestClient
 
+from dunzo import content_repo as repo
 from dunzo.app import create_app
+from dunzo.db import connect
 
 
 @pytest.fixture
@@ -12,16 +15,17 @@ def client(settings):
         yield c
 
 
-def upload(client, data=b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
-           mime="image/svg+xml"):
-    r = client.post("/players", data={"name": "p", "source": "x"})
-    pid = r.headers["location"].split("?")[0].rsplit("/", 1)[1]
-    client.post(f"/players/{pid}/media", files={"file": ("f", data, mime)})
+def store(settings, data=b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
+          mime="image/svg+xml"):
+    db = connect()
+    repo.add_media(db, settings.media_dir, io.BytesIO(data), mime)
+    db.commit()
+    db.close()
     return hashlib.sha256(data).hexdigest()
 
 
-def test_served_with_safe_headers(client):
-    media_id = upload(client)
+def test_served_with_safe_headers(client, settings):
+    media_id = store(settings)
     r = client.get(f"/media/{media_id}")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("image/svg+xml")
@@ -40,6 +44,15 @@ def test_malformed_ids_are_404(client, bad):
 
 
 def test_row_without_file_is_404(client, settings):
-    media_id = upload(client, data=b"gone-soon", mime="image/png")
+    media_id = store(settings, data=b"gone-soon", mime="image/png")
     (settings.media_dir / media_id).unlink()
     assert client.get(f"/media/{media_id}").status_code == 404
+
+
+def test_a_players_files_are_not_served_as_media(client, settings):
+    db = connect()
+    player = repo.create_player(db, "p", "<p>secret</p>")
+    db.commit()
+    digest = repo.list_player_files(db, player.id)[0].hash
+    db.close()
+    assert client.get(f"/media/{digest}").status_code == 404

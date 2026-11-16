@@ -17,6 +17,11 @@ SCHEMA = json.dumps(
 )
 PNG = b"\x89PNG fake image"
 MP3 = b"fake audio"
+BASIC_FILES = {
+    "index.html": b"<!-- basic -->\n",
+    "css/main.css": b"body {}\n",
+    "player.js": b"// basic\n",
+}
 
 
 def png_id(data=PNG):
@@ -29,12 +34,11 @@ def add_media(conn, settings, data, mime="image/png"):
 
 @pytest.fixture
 def world(conn, settings):
-    """Two decks, two players, media on a note and on a player; one deck's notes reordered."""
-    basic = repo.create_player(conn, "Basic", "// basic\r\n", SCHEMA)
-    plain = repo.create_player(conn, "Plain", "// plain")
+    """Two decks, two players (one with several files), media on notes; one deck's notes reordered."""
+    basic = repo.create_player(conn, "Basic", BASIC_FILES, SCHEMA)
+    plain = repo.create_player(conn, "Plain", "<!-- plain -->")
     pic = add_media(conn, settings, PNG)
     sound = add_media(conn, settings, MP3, "audio/mpeg")
-    repo.link_player_media(conn, basic.id, sound.id)
     spanish = repo.create_deck(conn, "Spanish")
     other = repo.create_deck(conn, "Other")
     a = repo.create_note(conn, spanish.id, basic.id, 2, {"front": "a", "n": 1})
@@ -42,6 +46,7 @@ def world(conn, settings):
     c = repo.create_note(conn, spanish.id, plain.id, 3, {"x": [1, {"y": None}]})
     repo.link_note_media(conn, a.id, pic.id)
     repo.link_note_media(conn, c.id, pic.id)
+    repo.link_note_media(conn, b.id, sound.id)
     repo.move_note(conn, c.id, before_note_id=a.id)  # order is now c, a, b
     repo.create_note(conn, other.id, plain.id, 1, {"only": True})
     conn.commit()
@@ -79,6 +84,10 @@ def count(conn, table):
     return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
 
+def file_bytes(conn, media_dir, player_id) -> dict[str, bytes]:
+    return {f.path: (media_dir / f.hash).read_bytes() for f in repo.list_player_files(conn, player_id)}
+
+
 def build(manifest, files=None, raw_manifest=None):
     """A package zip from a manifest dict and extra members."""
     buf = io.BytesIO()
@@ -93,16 +102,18 @@ def build(manifest, files=None, raw_manifest=None):
 
 
 def base_manifest(**over):
-    m = {"format": "dunzo-package", "version": 1, "decks": [], "players": [], "media": []}
+    m = {"format": "dunzo-package", "version": packages.FORMAT_VERSION, "decks": [], "players": [],
+         "media": []}
     m.update(over)
     return m
 
 
 PID = str(uuid.uuid4())
+PF = {f"players/{PID}/index.html": "x"}  # the one file of the default test player
 
 
-def one_player(schema=None, media=()):
-    return {"id": PID, "name": "P", "note_schema": schema, "media": list(media)}
+def one_player(schema=None, files=("index.html",)):
+    return {"id": PID, "name": "P", "note_schema": schema, "files": list(files)}
 
 
 def one_deck(*notes, name="D"):
@@ -123,21 +134,28 @@ def do_import(conn, media_dir, package):
 
 def test_package_layout(conn, settings, world):
     data = export(conn, settings, [world["spanish"].id])
+    basic, plain = world["basic"].id, world["plain"].id
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert set(zf.namelist()) == {
             "manifest.json",
-            f"players/{world['basic'].id}.js",
-            f"players/{world['plain'].id}.js",
+            f"players/{basic}/index.html",
+            f"players/{basic}/css/main.css",
+            f"players/{basic}/player.js",
+            f"players/{plain}/index.html",
             f"media/{world['pic'].id}",
             f"media/{world['sound'].id}",
         }
         assert zf.read(f"media/{world['pic'].id}") == PNG
-        assert zf.read(f"players/{world['basic'].id}.js").decode() == "// basic\n"
+        for path, content in BASIC_FILES.items():
+            assert zf.read(f"players/{basic}/{path}") == content
     m = manifest_of(data)
-    assert (m["format"], m["version"]) == ("dunzo-package", 1)
+    assert (m["format"], m["version"]) == ("dunzo-package", 2)
     assert [d["name"] for d in m["decks"]] == ["Spanish"]
-    assert {p["name"] for p in m["players"]} == {"Basic", "Plain"}
-    assert next(p for p in m["players"] if p["name"] == "Basic")["note_schema"] == json.loads(SCHEMA)
+    players = {p["name"]: p for p in m["players"]}
+    assert set(players) == {"Basic", "Plain"}
+    assert players["Basic"]["note_schema"] == json.loads(SCHEMA)
+    assert players["Basic"]["files"] == ["css/main.css", "index.html", "player.js"]
+    assert players["Plain"]["files"] == ["index.html"]
     assert {x["id"] for x in m["media"]} == {world["pic"].id, world["sound"].id}
 
 
@@ -166,7 +184,14 @@ def test_export_errors(conn, settings, world):
     with pytest.raises(packages.PackageError, match="Deck not found"):
         export(conn, settings, ["nope"])
     (settings.media_dir / world["pic"].id).unlink()
-    with pytest.raises(packages.PackageError, match="missing on disk"):
+    with pytest.raises(packages.PackageError, match="media file .* missing on disk"):
+        export(conn, settings, [world["spanish"].id])
+
+
+def test_export_with_a_missing_player_file(conn, settings, world):
+    entry = repo.get_player_file(conn, world["basic"].id, "player.js")
+    (settings.media_dir / entry.hash).unlink()
+    with pytest.raises(packages.PackageError, match="player.js.* missing on disk"):
         export(conn, settings, [world["spanish"].id])
 
 
@@ -232,12 +257,14 @@ def test_import_into_a_fresh_installation_preserves_everything(conn, settings, w
 
     assert [m.id for m in repo.list_note_media(c2, notes[1].id)] == [world["pic"].id]
     assert [m.id for m in repo.list_note_media(c2, notes[0].id)] == [world["pic"].id]
-    assert repo.list_note_media(c2, notes[2].id) == []
+    assert [m.id for m in repo.list_note_media(c2, notes[2].id)] == [world["sound"].id]
     assert (media2 / world["pic"].id).read_bytes() == PNG
 
     basic = repo.get_player(c2, world["basic"].id)  # players keep their identity
-    assert basic.source == "// basic\n" and basic.note_schema == world["basic"].note_schema
-    assert [m.id for m in repo.list_player_media(c2, basic.id)] == [world["sound"].id]
+    assert file_bytes(c2, media2, basic.id) == BASIC_FILES
+    assert basic.files_hash == world["basic"].files_hash
+    assert basic.note_schema == world["basic"].note_schema
+    assert file_bytes(c2, media2, world["plain"].id) == {"index.html": b"<!-- plain -->"}
 
 
 def test_import_creates_no_progress(conn, settings, world, second):
@@ -262,7 +289,8 @@ def test_importing_twice_copies_decks_but_reuses_players_and_media(conn, setting
     assert result.players_added == 0 and result.players_reused == 2
     assert count(c2, "deck") == 2 and count(c2, "note") == 6
     assert count(c2, "player") == 2 and count(c2, "media") == 2
-    assert len(list(media2.iterdir())) == 2
+    assert count(c2, "player_file") == 4  # three files of Basic, one of Plain
+    assert len(list(media2.iterdir())) == 2 + 4  # two media files and four distinct player files
 
 
 def test_importing_into_the_same_installation(conn, settings, world):
@@ -272,23 +300,34 @@ def test_importing_into_the_same_installation(conn, settings, world):
     assert count(conn, "player") == 2
 
 
-def test_same_player_id_with_different_code_is_added_as_a_copy(conn, settings, world, second):
+def test_same_player_id_with_different_files_is_added_as_a_copy(conn, settings, world, second):
     c2, media2 = second
     data = export(conn, settings, [world["other"].id])
-    existing = repo.create_player(c2, "Mine", "// my own code", None, player_id=world["plain"].id)
+    existing = repo.create_player(
+        c2, "Mine", "<!-- my own page -->", None, player_id=world["plain"].id, media_dir=media2
+    )
     c2.commit()
     result = do_import(c2, media2, io.BytesIO(data))
     assert result.players_added == 1 and result.players_reused == 0
-    assert repo.get_player(c2, existing.id).source == "// my own code"  # untouched
+    assert repo.get_player(c2, existing.id) == existing  # untouched
+    assert file_bytes(c2, media2, existing.id) == {"index.html": b"<!-- my own page -->"}
     _, notes = deck_notes(c2, "Other")
     assert notes[0].player_id != existing.id
-    assert repo.get_player(c2, notes[0].player_id).source == "// plain"
+    assert file_bytes(c2, media2, notes[0].player_id) == {"index.html": b"<!-- plain -->"}
     assert count(c2, "player") == 2
+
+
+def test_same_player_id_with_one_file_changed_is_also_a_copy(conn, settings, world, second):
+    c2, media2 = second
+    changed = {**BASIC_FILES, "player.js": b"// edited\n"}
+    repo.create_player(c2, "Basic", changed, SCHEMA, player_id=world["basic"].id, media_dir=media2)
+    do_import(c2, media2, io.BytesIO(export(conn, settings, [world["spanish"].id])))
+    assert count(c2, "player") == 3
 
 
 def test_same_player_id_with_different_schema_is_also_a_copy(conn, settings, world, second):
     c2, media2 = second
-    repo.create_player(c2, "Basic", "// basic\n", None, player_id=world["basic"].id)  # no schema
+    repo.create_player(c2, "Basic", BASIC_FILES, None, player_id=world["basic"].id, media_dir=media2)  # no schema
     do_import(c2, media2, io.BytesIO(export(conn, settings, [world["spanish"].id])))
     assert count(c2, "player") == 3
 
@@ -298,12 +337,13 @@ def test_empty_package_imports_nothing(conn, settings, second):
     assert do_import(c2, media2, io.BytesIO(export(conn, settings, []))) == packages.ImportResult(0, 0, 0, 0, 0)
 
 
-def test_player_source_line_endings_are_normalized(conn, settings, second):
+def test_player_files_are_kept_byte_for_byte(second):
     c2, media2 = second
+    raw = b"a\r\nb\x00\xff"
     package = build(base_manifest(players=[one_player()], decks=[one_deck(note())]),
-                    {f"players/{PID}.js": "a\r\nb"})
+                    {f"players/{PID}/index.html": raw})
     do_import(c2, media2, package)
-    assert repo.get_player(c2, PID).source == "a\nb"
+    assert file_bytes(c2, media2, PID) == {"index.html": raw}
 
 
 def test_create_player_with_explicit_id(conn):
@@ -319,7 +359,7 @@ def failing(conn, media_dir, package, message):
     with pytest.raises(packages.PackageError, match=message):
         do_import(conn, media_dir, package)
     conn.rollback()
-    for table in ("deck", "note", "player", "media"):
+    for table in ("deck", "note", "player", "player_file", "media"):
         assert count(conn, table) == 0, table
 
 
@@ -338,9 +378,10 @@ def test_missing_or_bad_manifest(second):
 
 def test_wrong_format_and_versions(second):
     c2, media2 = second
-    failing(c2, media2, build({"format": "other", "version": 1}), "not a dunzo package")
-    failing(c2, media2, build(base_manifest(version=2)), "version 2")
-    failing(c2, media2, build(base_manifest(version="1")), "no valid version")
+    failing(c2, media2, build({"format": "other", "version": 2}), "not a dunzo package")
+    failing(c2, media2, build(base_manifest(version=3)), "version 3")
+    failing(c2, media2, build(base_manifest(version=1)), "no longer reads")
+    failing(c2, media2, build(base_manifest(version="2")), "no valid version")
     failing(c2, media2, build(base_manifest(version=True)), "no valid version")
 
 
@@ -368,26 +409,34 @@ def test_package_size_and_member_limits(second, monkeypatch):
         (base_manifest(decks=[{"notes": []}]), {}, "“name” must be text"),
         (base_manifest(players=[{"id": "nope", "name": "P"}]), {}, "must be a UUID"),
         (base_manifest(players=[{"id": PID.upper(), "name": "P"}]), {}, "lower-case UUID"),
-        (base_manifest(players=[{"id": PID, "name": "P"}]), {}, "source of player “P”"),
-        (base_manifest(players=[one_player(), one_player()]), {f"players/{PID}.js": "x"}, "listed twice"),
-        (base_manifest(players=[one_player()]), {f"players/{PID}.js": "  "}, "source cannot be empty"),
-        (base_manifest(players=[one_player()]), {f"players/{PID}.js": b"\xff\xfe"}, "not valid UTF-8"),
-        (base_manifest(players=[one_player(schema=[1])]), {f"players/{PID}.js": "x"}, "object or null"),
-        (base_manifest(players=[one_player(schema={"type": "nonsense"})]), {f"players/{PID}.js": "x"},
-         "not a valid JSON Schema"),
-        (base_manifest(players=[{"id": PID, "name": " "}]), {f"players/{PID}.js": "x"}, "name cannot be empty"),
+        (base_manifest(players=[{"id": PID, "name": "P"}]), {}, "needs an index.html"),
+        (base_manifest(players=[one_player(), one_player()]), PF, "listed twice"),
+        (base_manifest(players=[one_player()]), {f"players/{PID}/index.html": ""}, "is empty"),
+        (base_manifest(players=[one_player(files=("index.html", "index.html"))]), PF, "listed twice"),
+        (base_manifest(players=[one_player(files=("index.html", "gone.js"))]), PF, "no file “gone.js”"),
+        (base_manifest(players=[one_player(files=("index.html", "../x.js"))]), PF, "not a valid file path"),
+        (base_manifest(players=[one_player(files=("index.html", "/abs.js"))]), PF, "not a valid file path"),
+        (base_manifest(players=[one_player(files=("index.html", "dunzo/api.js"))]),
+         {**PF, f"players/{PID}/dunzo/api.js": "evil"}, "reserved"),
+        (base_manifest(players=[one_player(files=("index.html", "run.exe"))]),
+         {**PF, f"players/{PID}/run.exe": "x"}, "not supported"),
+        (base_manifest(players=[one_player(files=("a.js",))]), {f"players/{PID}/a.js": "x"}, "needs an index.html"),
+        (base_manifest(players=[{**one_player(), "files": "index.html"}]), PF, "files must be a list"),
+        (base_manifest(players=[one_player(files=(5,))]), PF, "must be text"),
+        (base_manifest(players=[one_player(schema=[1])]), PF, "object or null"),
+        (base_manifest(players=[one_player(schema={"type": "nonsense"})]), PF, "not a valid JSON Schema"),
+        (base_manifest(players=[{"id": PID, "name": " ", "files": ["index.html"]}]), PF, "name cannot be empty"),
         (base_manifest(decks=[one_deck(note())]), {}, "its player is not in the package"),
         (base_manifest(decks=[one_deck({"player_id": 5})]), {}, "its player is not in the package"),
         (base_manifest(decks=[one_deck(note(player_id=str(uuid.uuid4())))],
-                       players=[one_player()]), {f"players/{PID}.js": "x"}, "its player is not"),
+                       players=[one_player()]), PF, "its player is not"),
         (base_manifest(decks=[one_deck(note(count=0))], players=[one_player()]),
-         {f"players/{PID}.js": "x"}, "Deck “D”, note 1: Number of cards"),
-        (base_manifest(decks=[one_deck(note(count="2"))], players=[one_player()]),
-         {f"players/{PID}.js": "x"}, "between 1 and"),
+         PF, "Deck “D”, note 1: Number of cards"),
+        (base_manifest(decks=[one_deck(note(count="2"))], players=[one_player()]), PF, "between 1 and"),
         (base_manifest(decks=[one_deck(note(properties={}))], players=[one_player(schema=json.loads(SCHEMA))]),
-         {f"players/{PID}.js": "x"}, "note 1: .*required"),
+         PF, "note 1: .*required"),
         (base_manifest(decks=[one_deck({"player_id": PID, "card_count": 1, "properties": [1]})],
-                       players=[one_player()]), {f"players/{PID}.js": "x"}, "must be a JSON object"),
+                       players=[one_player()]), PF, "must be a JSON object"),
     ],
 )
 def test_invalid_manifests_write_nothing(second, manifest, files, message):
@@ -401,8 +450,16 @@ def test_one_bad_note_stops_the_whole_import(second):
         players=[one_player(schema=json.loads(SCHEMA))],
         decks=[one_deck(note({"front": "ok"}), name="Good"), one_deck(note({}), name="Bad")],
     )
-    failing(c2, media2, build(manifest, {f"players/{PID}.js": "x"}), "Deck “Bad”, note 1")
+    failing(c2, media2, build(manifest, PF), "Deck “Bad”, note 1")
     assert count(c2, "player") == 0  # validated before anything was written
+    assert not media2.exists() or list(media2.iterdir()) == []  # and no bytes were stored
+
+
+def test_an_oversized_player_file_is_refused(second, monkeypatch):
+    c2, media2 = second
+    monkeypatch.setattr(repo, "MAX_PLAYER_FILE_BYTES", 3)
+    failing(c2, media2, build(base_manifest(players=[one_player()]), {f"players/{PID}/index.html": "1234"}),
+            "too large")
 
 
 MID = png_id()
@@ -415,10 +472,8 @@ MID = png_id()
         (base_manifest(media=[{"id": MID, "mime": "text/html"}]), {f"media/{MID}": PNG}, "not supported"),
         (base_manifest(media=[{"id": MID, "mime": "image/png"}]), {}, "is missing"),
         (base_manifest(media=[{"id": MID, "mime": "image/png"}] * 2), {f"media/{MID}": PNG}, "listed twice"),
-        (base_manifest(players=[one_player(media=[MID])]), {f"players/{PID}.js": "x"}, "package lacks"),
-        (base_manifest(players=[one_player(media=["zz"])]), {f"players/{PID}.js": "x"}, "sha256 hashes"),
-        (base_manifest(players=[one_player()], decks=[one_deck(note(media=[MID]))]),
-         {f"players/{PID}.js": "x"}, "package lacks"),
+        (base_manifest(players=[one_player()], decks=[one_deck(note(media=[MID]))]), PF, "package lacks"),
+        (base_manifest(players=[one_player()], decks=[one_deck(note(media=["zz"]))]), PF, "sha256 hashes"),
     ],
 )
 def test_bad_media_declarations(second, manifest, files, message):
@@ -442,7 +497,8 @@ def test_member_names_are_never_used_as_paths(second, tmp_path):
     c2, media2 = second
     package = build(
         base_manifest(),
-        {"../evil.txt": "x", "/abs/evil.txt": "x", "media/../../evil2": "x", "extra/file": "x"},
+        {"../evil.txt": "x", "/abs/evil.txt": "x", "media/../../evil2": "x", "extra/file": "x",
+         f"players/{PID}/../../evil3.js": "x"},
     )
     do_import(c2, media2, package)
     assert not (tmp_path / "evil.txt").exists() and not (tmp_path.parent / "evil.txt").exists()
@@ -452,5 +508,6 @@ def test_member_names_are_never_used_as_paths(second, tmp_path):
 def test_unreferenced_extra_files_are_ignored(second):
     c2, media2 = second
     manifest = base_manifest(players=[one_player()], decks=[one_deck(note())])
-    do_import(c2, media2, build(manifest, {f"players/{PID}.js": "x", "readme.txt": "hi"}))
+    do_import(c2, media2, build(manifest, {**PF, "readme.txt": "hi", f"players/{PID}/unlisted.js": "x"}))
     assert count(c2, "note") == 1
+    assert file_bytes(c2, media2, PID) == {"index.html": b"x"}

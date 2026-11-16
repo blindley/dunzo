@@ -1,5 +1,6 @@
 import io
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +13,13 @@ from dunzo.templating import STATIC_DIR
 
 NOW = 1_000_000.0
 DAY = 86400.0
+
+SITE = {
+    "index.html": b'<script src="dunzo/api.js"></script><script src="dunzo/card.js"></script>',
+    "css/main.css": b"body{}",
+    "js/app.js": b"var x = '</script>';\n",
+    "img/pic.png": b"\x89PNG",
+}
 
 
 @pytest.fixture
@@ -33,9 +41,9 @@ def clock(monkeypatch):
     monkeypatch.setattr(review, "_now", lambda: NOW)
 
 
-def make(db, source="// js"):
+def make(db, files=None):
     deck = repo.create_deck(db, "Deck")
-    player = repo.create_player(db, "Player", source)
+    player = repo.create_player(db, "Player", SITE if files is None else files)
     db.commit()
     return deck, player
 
@@ -58,6 +66,10 @@ def report(client, deck, **body):
 
 def rows(db, table):
     return db.execute(f"SELECT * FROM {table}").fetchall()
+
+
+def frame(note, index=0, path="index.html"):
+    return f"/review/frame/{note.id}/{index}/{path}"
 
 
 # ---------------------------------------------------------------------------- pages
@@ -90,27 +102,31 @@ def test_empty_deck_is_done(client, db):
     assert nxt(client, deck) == {"done": True, "counts": {"due": 0, "new": 0}}
 
 
-def test_next_returns_card_media_and_frame(client, db, settings):
+def test_next_returns_the_card_its_media_and_the_frame_url(client, db, settings):
     deck, player = make(db)
     n = add_note(db, deck, player, count=2, props={"front": "Hola", "pic": "x"})
     note_pic = repo.add_media(db, settings.media_dir, io.BytesIO(b"a"), "image/png")
-    player_pic = repo.add_media(db, settings.media_dir, io.BytesIO(b"b"), "image/png")
     repo.link_note_media(db, n.id, note_pic.id)
-    repo.link_player_media(db, player.id, player_pic.id)
     db.commit()
     data = nxt(client, deck)
     assert data["done"] is False and data["is_new"] is True
     assert data["counts"] == {"due": 0, "new": 2}
-    assert data["frame_url"] == f"/review/frame/{player.id}"
+    assert data["frame_url"] == f"/review/frame/{n.id}/0/index.html"
     card = data["card"]
     assert card["index"] == 0 and card["card_count"] == 2
     assert card["note"]["id"] == n.id and card["note"]["properties"] == {"front": "Hola", "pic": "x"}
-    assert {m["id"] for m in card["note"]["media"]} == {note_pic.id, player_pic.id}
-    one = next(m for m in card["note"]["media"] if m["id"] == note_pic.id)
-    assert one == {"id": note_pic.id, "mime": "image/png", "size": 1,
-                   "url": f"/cards/{n.id}/media/{note_pic.id}"}
-    assert client.get(one["url"]).content == b"a"  # the listed URL works
+    assert card["note"]["media"] == [
+        {"id": note_pic.id, "mime": "image/png", "size": 1, "url": f"/cards/{n.id}/media/{note_pic.id}"}
+    ]
+    assert client.get(card["note"]["media"][0]["url"]).content == b"a"  # the listed URL works
     assert client.get(f"/decks/{deck.id}/review/next").headers["cache-control"] == "no-store"
+
+
+def test_the_frame_url_names_the_card_to_show(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player, count=2)
+    report(client, deck, note_id=n.id, card_index=0, grade=3)
+    assert nxt(client, deck)["frame_url"] == f"/review/frame/{n.id}/1/index.html"
 
 
 def test_due_card_is_served_before_new_ones(client, db):
@@ -236,42 +252,157 @@ def test_unknown_scheduler_in_stored_state_is_a_conflict(client, db):
     assert report(client, deck, note_id=n.id, card_index=0, grade=3).status_code == 409
 
 
-# ---------------------------------------------------------------- the player's frame
+# ------------------------------------------------------------- the player's directory
 
 
-def test_frame_is_locked_down_and_loads_api_then_player(client, db):
+def test_index_is_served_with_the_frame_headers(client, db):
     deck, player = make(db)
-    r = client.get(f"/review/frame/{player.id}")
-    assert r.status_code == 200
+    n = add_note(db, deck, player)
+    r = client.get(frame(n))
+    assert r.status_code == 200 and r.content == SITE["index.html"]
+    assert r.headers["content-type"].startswith("text/html")
     csp = r.headers["content-security-policy"]
     for part in ("default-src 'none'", "script-src 'self'", "connect-src 'none'",
                  "form-action 'none'", "sandbox allow-scripts"):
         assert part in csp
     assert "unsafe-eval" not in csp and "allow-same-origin" not in csp
     assert r.headers["x-content-type-options"] == "nosniff"
-    body = r.text
-    api = body.index("/static/player-api.js")
-    src = body.index(f"/review/player/{player.id}/source.js?v={player.source_hash}")
-    assert api < src
-    assert "<script>" not in body  # no inline script: the player's code is never inlined
-    assert client.get("/review/frame/nope").status_code == 404
+    assert r.headers["access-control-allow-origin"] == "*"
+    assert r.headers["cache-control"] == "no-cache"
 
 
-def test_player_source_is_served_verbatim_as_javascript(client, db):
-    source = "var x = '</script><b>';\n// ok\n"
-    _, player = make(db, source=source)
-    r = client.get(f"/review/player/{player.id}/source.js")
-    assert r.status_code == 200 and r.text == source
-    assert r.headers["content-type"].startswith("text/javascript")
-    assert r.headers["x-content-type-options"] == "nosniff"
-    assert client.get("/review/player/nope/source.js").status_code == 404
+def test_an_empty_path_is_the_index(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player)
+    assert client.get(f"/review/frame/{n.id}/0/").content == SITE["index.html"]
 
 
-def test_edited_player_source_is_what_the_frame_gets(client, db):
-    _, player = make(db)
-    repo.update_player(db, player.id, "Player", "// v2", None)
+def test_other_files_are_served_verbatim_with_their_type(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player)
+    css = client.get(frame(n, 0, "css/main.css"))
+    assert css.status_code == 200 and css.content == b"body{}"
+    assert css.headers["content-type"].startswith("text/css")
+    js = client.get(frame(n, 0, "js/app.js"))
+    assert js.content == SITE["js/app.js"] and js.headers["content-type"].startswith("text/javascript")
+    png = client.get(frame(n, 0, "img/pic.png"))
+    assert png.content == SITE["img/pic.png"] and png.headers["content-type"] == "image/png"
+    for r in (css, js, png):
+        assert "sandbox allow-scripts" in r.headers["content-security-policy"]
+
+
+def test_relative_references_from_the_index_resolve_inside_the_card_directory(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player)
+    base = nxt(client, deck)["frame_url"]
+    assert base == f"/review/frame/{n.id}/0/index.html"
+    # what a browser makes of src="dunzo/card.js" and href="css/main.css" on that page
+    directory = base.rsplit("/", 1)[0]
+    assert client.get(directory + "/dunzo/card.js").status_code == 200
+    assert client.get(directory + "/css/main.css").status_code == 200
+
+
+def test_missing_files_unknown_cards_and_traversal_are_404(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player, count=2)
+    assert client.get(frame(n, 0, "nope.js")).status_code == 404
+    assert client.get(frame(n, 0, "css/")).status_code == 404
+    assert client.get(frame(n, 0, "css")).status_code == 404
+    assert client.get(frame(n, 2)).status_code == 404  # no such card
+    assert client.get("/review/frame/nope/0/index.html").status_code == 404
+    # encoded traversal never reaches anything: files are looked up by exact path in the
+    # database, not on disk by name
+    for path in ("%2e%2e/index.html", "..%2f..%2fetc/passwd", "css/%2e%2e/index.html", "%2fetc/passwd"):
+        assert client.get(frame(n, 0, path)).status_code == 404, path
+
+
+def test_another_players_files_are_not_reachable(client, db):
+    deck, player = make(db)
+    other = repo.create_player(db, "Other", {"index.html": b"o", "secret.js": b"s"})
+    n = add_note(db, deck, player)
     db.commit()
-    assert "// v2" in client.get(f"/review/player/{player.id}/source.js").text
+    assert client.get(frame(n, 0, "secret.js")).status_code == 404
+    assert other.id
+
+
+def test_a_row_without_its_file_is_404(client, db, settings):
+    deck, player = make(db)
+    n = add_note(db, deck, player)
+    entry = repo.get_player_file(db, player.id, "css/main.css")
+    (settings.media_dir / entry.hash).unlink()
+    assert client.get(frame(n, 0, "css/main.css")).status_code == 404
+
+
+def test_edited_files_are_what_the_frame_gets(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player)
+    repo.replace_player_files(db, player.id, {"index.html": b"<p>v2</p>"})
+    db.commit()
+    assert client.get(frame(n)).content == b"<p>v2</p>"
+    assert client.get(frame(n, 0, "css/main.css")).status_code == 404
+
+
+# ------------------------------------------------------------------ the dunzo/ files
+
+
+def test_card_js_carries_the_card(client, db, settings):
+    deck, player = make(db)
+    n = add_note(db, deck, player, count=3, props={"front": "日本語", "back": "x"})
+    pic = repo.add_media(db, settings.media_dir, io.BytesIO(b"a"), "image/png")
+    repo.link_note_media(db, n.id, pic.id)
+    db.commit()
+    r = client.get(frame(n, 2, "dunzo/card.js"))
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/javascript")
+    assert r.headers["cache-control"] == "no-store"
+    assert "sandbox allow-scripts" in r.headers["content-security-policy"]
+    match = re.fullmatch(r"window\.dunzoCard = (.*);\n", r.text, re.DOTALL)
+    assert match
+    card = json.loads(match.group(1))
+    assert card == {
+        "note": {
+            "id": n.id,
+            "properties": {"front": "日本語", "back": "x"},
+            "media": [{"id": pic.id, "mime": "image/png", "size": 1, "url": f"/cards/{n.id}/media/{pic.id}"}],
+        },
+        "index": 2,
+        "card_count": 3,
+    }
+    assert card == client.get(f"/decks/{deck.id}/review/next").json()["card"] | {"index": 2}
+
+
+def test_card_js_differs_per_card(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player, count=2)
+    assert client.get(frame(n, 0, "dunzo/card.js")).text != client.get(frame(n, 1, "dunzo/card.js")).text
+
+
+def test_card_js_for_a_missing_card_is_404(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player)
+    assert client.get(frame(n, 1, "dunzo/card.js")).status_code == 404
+    assert client.get("/review/frame/nope/0/dunzo/card.js").status_code == 404
+
+
+def test_api_js_is_the_static_player_api(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player)
+    r = client.get(frame(n, 0, "dunzo/api.js"))
+    assert r.status_code == 200 and r.text == (STATIC_DIR / "player-api.js").read_text()
+    assert r.headers["content-type"].startswith("text/javascript")
+    assert "sandbox allow-scripts" in r.headers["content-security-policy"]
+
+
+def test_nothing_else_exists_under_dunzo(client, db):
+    deck, player = make(db)
+    n = add_note(db, deck, player)
+    for path in ("dunzo/other.js", "dunzo/", "dunzo", "dunzo/api.js/x", "dunzo/sub/card.js"):
+        assert client.get(frame(n, 0, path)).status_code == 404, path
+
+
+def test_players_cannot_shadow_the_dunzo_files(db):
+    with pytest.raises(ValueError, match="reserved"):
+        repo.create_player(db, "p", {"index.html": b"x", "dunzo/card.js": b"evil"})
 
 
 # --------------------------------------------------------------------- static assets
@@ -293,5 +424,9 @@ def test_host_sandboxes_with_scripts_only():
 def test_host_only_trusts_its_own_frame():
     host = (STATIC_DIR / "player-host.js").read_text()
     assert "event.source !== frame.contentWindow" in host
+
+
+def test_player_api_reports_to_the_host_and_needs_no_messages_in():
     api = (STATIC_DIR / "player-api.js").read_text()
-    assert "event.source !== parent" in api
+    assert "parent.postMessage" in api and "dunzoCard" in api
+    assert 'addEventListener("message"' not in api  # the card arrives as a script, not a message

@@ -54,17 +54,3 @@ def test_too_large_rejected_and_cleaned_up(conn, tmp_path, monkeypatch):
         content_repo.add_media(conn, media_dir, io.BytesIO(b"x" * 11), "image/png")
     assert list(media_dir.iterdir()) == []
     assert conn.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
-
-
-def test_link_unlink_list(conn, tmp_path):
-    p = content_repo.create_player(conn, "p", "x")
-    a = content_repo.add_media(conn, tmp_path / "m", io.BytesIO(b"a"), "image/png")
-    b = content_repo.add_media(conn, tmp_path / "m", io.BytesIO(b"b"), "audio/mpeg")
-    content_repo.link_player_media(conn, p.id, a.id)
-    content_repo.link_player_media(conn, p.id, a.id)  # linking twice is harmless
-    content_repo.link_player_media(conn, p.id, b.id)
-    assert {m.id for m in content_repo.list_player_media(conn, p.id)} == {a.id, b.id}
-    assert content_repo.unlink_player_media(conn, p.id, a.id) is True
-    assert content_repo.unlink_player_media(conn, p.id, a.id) is False
-    assert [m.id for m in content_repo.list_player_media(conn, p.id)] == [b.id]
-    assert content_repo.get_media(conn, a.id) is not None  # unlinking keeps the media

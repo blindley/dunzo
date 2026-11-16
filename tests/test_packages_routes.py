@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dunzo import content_repo as repo
+from dunzo import packages
 from dunzo.app import create_app
 from dunzo.db import connect
 
@@ -28,7 +29,7 @@ def db(client):
 
 def make(db, settings, name="Spanish/Verbs: 1"):
     deck = repo.create_deck(db, name)
-    player = repo.create_player(db, "P", "// js")
+    player = repo.create_player(db, "P", {"index.html": b"<p>js</p>", "css/a.css": b"a{}"})
     n1 = repo.create_note(db, deck.id, player.id, 1, {"front": "one"})
     n2 = repo.create_note(db, deck.id, player.id, 2, {"front": "two"})
     media = repo.add_media(db, settings.media_dir, io.BytesIO(PNG), "image/png")
@@ -58,7 +59,6 @@ def test_page_empty_state(client):
     assert r.status_code == 200
     assert "No decks to export yet" in r.text
     assert 'action="/packages/import"' in r.text and 'enctype="multipart/form-data"' in r.text
-    assert 'href="/packages"' in r.text  # the nav link
     assert "Imported" not in r.text
 
 
@@ -81,8 +81,10 @@ def test_export_one_deck(client, db, settings):
     m = manifest_of(r.content)
     assert [d["name"] for d in m["decks"]] == ["Spanish/Verbs: 1"]
     assert [n["properties"]["front"] for n in m["decks"][0]["notes"]] == ["one", "two"]
+    assert m["players"][0]["files"] == ["css/a.css", "index.html"]
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         assert zf.read(f"media/{media.id}") == PNG
+        assert zf.read(f"players/{m['players'][0]['id']}/css/a.css") == b"a{}"
 
 
 def test_export_all_decks(client, db, settings):
@@ -103,6 +105,15 @@ def test_export_with_missing_media_file_is_a_409(client, db, settings):
     (settings.media_dir / media.id).unlink()
     r = client.get(f"/decks/{deck.id}/export")
     assert r.status_code == 409 and "missing on disk" in r.json()["detail"]
+
+
+def test_export_with_missing_player_file_is_a_409(client, db, settings):
+    deck, _, _ = make(db, settings)
+    player = repo.list_players(db)[0]
+    entry = repo.get_player_file(db, player.id, "css/a.css")
+    (settings.media_dir / entry.hash).unlink()
+    r = client.get(f"/decks/{deck.id}/export")
+    assert r.status_code == 409 and "css/a.css" in r.json()["detail"]
 
 
 def test_export_leaves_no_temporary_files(client, db, settings, monkeypatch, tmp_path):
@@ -162,6 +173,15 @@ def test_no_file_chosen(client):
     assert r.status_code == 422 and "Choose a package file" in r.text
 
 
+def test_a_version_1_package_is_refused_with_a_reason(client, db):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(
+            {"format": "dunzo-package", "version": 1, "decks": [], "players": [], "media": []}))
+    r = upload(client, buf.getvalue())
+    assert r.status_code == 422 and "no longer reads" in r.text
+
+
 def test_error_after_partial_writes_is_rolled_back(client, db):
     """A media file that does not match its hash is only noticed after other rows exist."""
     good = b"good bytes"
@@ -172,7 +192,7 @@ def test_error_after_partial_writes_is_rolled_back(client, db):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("manifest.json", json.dumps({
-            "format": "dunzo-package", "version": 1, "decks": [], "players": [],
+            "format": "dunzo-package", "version": packages.FORMAT_VERSION, "decks": [], "players": [],
             "media": [{"id": good_id, "mime": "image/png"}, {"id": bad_id, "mime": "image/png"}],
         }))
         zf.writestr(f"media/{good_id}", good)

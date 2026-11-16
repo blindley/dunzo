@@ -48,7 +48,7 @@
       return;
     }
     current = { note_id: data.card.note.id, card_index: data.card.index };
-    host.load(data.frame_url, data.card);
+    host.load(data.frame_url);
   }
 
   function onDone(grade, detail) {

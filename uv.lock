@@ -70,6 +70,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
+    { name = "referencing" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -87,6 +88,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.20" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "referencing", specifier = ">=0.30" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

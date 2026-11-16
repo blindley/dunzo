@@ -105,7 +105,7 @@ def test_delete_confirmation_mentions_notes_when_present(client, settings):
     deck_id = deck_id_from(r.text)
     c = connect()
     pid, nid = str(uuid.uuid4()), str(uuid.uuid4())
-    c.execute("INSERT INTO player (id, name, source, source_hash) VALUES (?, 'p', 'x', 'h')", (pid,))
+    c.execute("INSERT INTO player (id, name, files_hash) VALUES (?, 'p', 'h')", (pid,))
     c.execute(
         "INSERT INTO note (id, deck_id, player_id, card_count, position, properties,"
         " created_at, updated_at) VALUES (?, ?, ?, 1, 1024, '{}', 0, 0)",

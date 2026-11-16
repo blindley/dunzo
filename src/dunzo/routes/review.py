@@ -1,12 +1,15 @@
-"""Review: the review page, the next-card and report endpoints, and the two resources that
-make up a player's sandboxed frame.
+"""Review: the review page, the next-card and report endpoints, and the files that make up a
+player's sandboxed frame.
 
 Also here: collection stats (`/stats`, `/decks/{id}/stats`) and a note's review history
 (`/notes/{id}/history`).
 
-Flow: the review page (a small client shell) asks `/decks/{id}/review/next` for a card, loads
-`/review/frame/{player_id}` into a sandboxed iframe, and sends the card to it with
-postMessage. When the player reports `done`, the shell POSTs the grade to
+Flow: the review page (a small client shell) asks `/decks/{id}/review/next` for a card and
+loads its `frame_url` into a sandboxed iframe. That URL is the player's `index.html` for this
+one card: `/review/frame/{note_id}/{card_index}/index.html`. Everything the player loads by
+relative URL comes from the same directory: the player's own files, plus the reserved
+`dunzo/` directory, whose `api.js` is the player API and whose `card.js` carries the card's
+data. When the player reports `done`, the shell POSTs the grade to
 `/decks/{id}/review/report`, which records it and answers with the next card.
 """
 
@@ -16,11 +19,12 @@ import time
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from dunzo import content_repo, progress_repo, review_queue, scheduler
+from dunzo.config import get_settings
 from dunzo.db import get_db
-from dunzo.templating import templates
+from dunzo.templating import STATIC_DIR, templates
 
 router = APIRouter()
 
@@ -28,13 +32,14 @@ Db = Annotated[sqlite3.Connection, Depends(get_db)]
 
 MAX_DETAIL_BYTES = 64 * 1024  # what a player may attach to one report
 
-# The frame document is untrusted code. It runs in an opaque origin (sandbox without
+# The frame's files are untrusted code. They run in an opaque origin (sandbox without
 # allow-same-origin) and may load only scripts, styles, images, audio, video and fonts from
-# this server, never make requests (connect-src 'none') and never navigate or submit.
+# this server, never make requests (connect-src 'none') and never navigate or submit. Inline
+# scripts and styles are allowed: the sandbox is what contains them.
 FRAME_CSP = "; ".join(
     [
         "default-src 'none'",
-        "script-src 'self'",
+        "script-src 'self' 'unsafe-inline'",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob:",
         "media-src 'self' blob:",
@@ -47,6 +52,13 @@ FRAME_CSP = "; ".join(
     ]
 )
 _NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+# Sent with every file of the frame, so that opening one directly is sandboxed too. The
+# wildcard is for fonts and module scripts, which are fetched with CORS from an opaque origin.
+_FRAME_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": FRAME_CSP,
+    "Access-Control-Allow-Origin": "*",
+}
 
 
 def _now() -> float:
@@ -61,6 +73,19 @@ def _require_deck(db: sqlite3.Connection, deck_id: str) -> content_repo.Deck:
     return deck
 
 
+def _card_payload(db: sqlite3.Connection, note: content_repo.Note, index: int) -> dict[str, Any]:
+    """The card as a player sees it: the note, which card of it this is, and its media."""
+    media = [
+        {"id": m.id, "mime": m.mime, "size": m.size, "url": f"/cards/{note.id}/media/{m.id}"}
+        for m in content_repo.list_card_media(db, note.id)
+    ]
+    return {
+        "note": {"id": note.id, "properties": note.properties, "media": media},
+        "index": index,
+        "card_count": note.card_count,
+    }
+
+
 def _next_payload(db: sqlite3.Connection, deck_id: str, now: float) -> JSONResponse:
     counts = review_queue.counts(db, deck_id, now)
     payload: dict[str, Any] = {"counts": {"due": counts.due, "new": counts.new}}
@@ -70,20 +95,12 @@ def _next_payload(db: sqlite3.Connection, deck_id: str, now: float) -> JSONRespo
     note = content_repo.get_note(db, queued.note_id)
     if note is None:  # pragma: no cover (same connection: cannot vanish between queries)
         raise HTTPException(status_code=404, detail="Note not found")
-    media = [
-        {"id": m.id, "mime": m.mime, "size": m.size, "url": f"/cards/{note.id}/media/{m.id}"}
-        for m in content_repo.list_card_media(db, note.id)
-    ]
     payload.update(
         {
             "done": False,
             "is_new": queued.is_new,
-            "frame_url": f"/review/frame/{note.player_id}",
-            "card": {
-                "note": {"id": note.id, "properties": note.properties, "media": media},
-                "index": queued.card_index,
-                "card_count": note.card_count,
-            },
+            "frame_url": f"/review/frame/{note.id}/{queued.card_index}/{content_repo.PLAYER_INDEX}",
+            "card": _card_payload(db, note, queued.card_index),
         }
     )
     return JSONResponse(payload, headers=_NO_STORE)
@@ -149,28 +166,43 @@ def report(deck_id: str, db: Db, body: Annotated[dict[str, Any], Body()]) -> Res
 # ----------------------------------------------------------------- the player's frame
 
 
-@router.get("/review/frame/{player_id}", response_class=HTMLResponse)
-def player_frame(player_id: str, request: Request, db: Db) -> Response:
-    """The document loaded into the sandboxed iframe: the host's player API, then the player."""
-    player = content_repo.get_player(db, player_id)
-    if player is None:
-        raise HTTPException(status_code=404, detail="Player not found")
-    return templates.TemplateResponse(
-        request,
-        "player_frame.html",
-        {"player": player},
-        headers={**_NO_STORE, "Content-Security-Policy": FRAME_CSP},
-    )
+@router.get("/review/frame/{note_id}/{card_index}/{path:path}")
+def frame_file(note_id: str, card_index: int, path: str, db: Db) -> Response:
+    """One file of the player's directory, as seen while reviewing one card.
 
-
-@router.get("/review/player/{player_id}/source.js")
-def player_source(player_id: str, db: Db) -> Response:
-    """The player's JavaScript, served as a script so the frame needs no inline code."""
-    player = content_repo.get_player(db, player_id)
-    if player is None:
-        raise HTTPException(status_code=404, detail="Player not found")
-    return Response(
-        player.source, media_type="text/javascript; charset=utf-8", headers=_NO_STORE
+    The card is part of the URL so that `dunzo/card.js` (relative to `index.html`) can carry
+    this card's data. An empty path is `index.html`. The `dunzo/` directory is reserved: only
+    `api.js` and `card.js` exist there. Everything else is looked up by exact path among the
+    player's files (never on disk by name), so no path can reach another file.
+    """
+    note = content_repo.get_note(db, note_id)
+    if note is None or not 0 <= card_index < note.card_count:
+        raise HTTPException(status_code=404, detail="Card not found")
+    path = path or content_repo.PLAYER_INDEX
+    reserved = content_repo.PLAYER_RESERVED_DIR
+    if path == f"{reserved}/card.js":
+        body = "window.dunzoCard = " + json.dumps(_card_payload(db, note, card_index), ensure_ascii=False) + ";\n"
+        return Response(
+            body,
+            media_type="text/javascript; charset=utf-8",
+            headers={**_FRAME_HEADERS, "Cache-Control": "no-store"},
+        )
+    if path == f"{reserved}/api.js":
+        return FileResponse(
+            STATIC_DIR / "player-api.js",
+            media_type="text/javascript",
+            headers={**_FRAME_HEADERS, "Cache-Control": "no-cache"},
+        )
+    if path == reserved or path.startswith(reserved + "/"):
+        raise HTTPException(status_code=404, detail="File not found")
+    entry = content_repo.get_player_file(db, note.player_id, path)
+    file_path = get_settings().media_dir / entry.hash if entry else None
+    if entry is None or file_path is None or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(
+        file_path,
+        media_type=entry.mime,
+        headers={**_FRAME_HEADERS, "Cache-Control": "no-cache"},
     )
 
 
